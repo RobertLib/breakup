@@ -1,0 +1,231 @@
+# Build the Windows and Linux archives and hand them back as artifacts to
+# download.
+#
+# **It publishes nothing and it starts on nothing.** No tag, no push, no
+# schedule: the only way this runs is somebody pressing the button on the Actions
+# tab, and the only thing it produces is two files attached to that run.
+#
+# The Linux payload is here because it cannot be built anywhere else: its SDL is
+# compiled against the userland it will run on, so a Mac cannot make one. The
+# Windows payload is here for a different reason — `make win` cross-builds it
+# happily on the same Mac that cuts the macOS release — and that reason is that
+# this is the only place a build of it happens on a machine nobody has been
+# developing on. `M_PI` is not in ISO C and mingw does not hand it out under
+# `-std=c17`; that was found by cross-building, not by anything a Mac told us.
+#
+# The macOS release is not here and cannot be: it is signed with a Developer ID
+# certificate and notarized by Apple, and both of those live in a keychain on one
+# machine. `make mac` is that build.
+#
+# The checks that run on every push live in .github/workflows/ci.yml, and the
+# split is the point: that one builds, tests and cross-builds and produces
+# nothing, this one produces the archives and starts on nothing but the button.
+# The portability break that a Windows build catches — `M_PI` is not in ISO C
+# and mingw does not hand it out under `-std=c17` — is caught there now, on the
+# commit that causes it, rather than here at release.
+#
+# This stays manual. The Linux job below is most of an hour of somebody's runner
+# minutes when its SDL cache is cold, and a payload is wanted when a release is
+# wanted rather than when a commit lands.
+
+name: payloads
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: windows x64 (mingw-w64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mingw-w64
+        run: |
+          sudo apt-get update -o Acquire::Retries=3
+          sudo apt-get install -y --no-install-recommends mingw-w64 zip xxd
+
+      - name: make win
+        run: make win
+
+      # There is no running a PE on a Linux runner without dragging wine in, so
+      # what is checked is the shape of the payload rather than its behaviour —
+      # and the shape is where this build goes wrong. Two things:
+      #
+      # The subsystem has to be 2 (GUI). At 3 the game works and opens a console
+      # window behind itself, which is the sort of thing nobody notices until it
+      # is in front of a player.
+      #
+      # The imports have to be the three SDL DLLs, KERNEL32 and the UCRT and
+      # nothing else. A fourth DLL name here means `-static-libgcc` stopped
+      # covering something and the payload now needs a file it does not carry —
+      # which on a player's machine is a dialog box about libgcc_s_seh-1.dll
+      # rather than anything about this game. It is exactly the failure that
+      # cannot be seen by looking at a zip that built fine.
+      - name: Check the payload's shape
+        run: |
+          set -euo pipefail
+          archive=$(ls dist/Breakup-*-windows-x64.zip)
+          rm -rf dist/unpacked && mkdir -p dist/unpacked
+          unzip -q "$archive" -d dist/unpacked
+          payload=$(cd "$(ls -d dist/unpacked/Breakup-*-windows-x64)" && pwd)
+
+          for f in breakup.exe SDL3.dll SDL3_ttf.dll SDL3_mixer.dll README.txt; do
+              test -f "$payload/$f" || { echo "payload is missing $f" >&2; exit 1; }
+          done
+
+          python3 - "$payload/breakup.exe" <<'PY'
+          import struct, sys
+          d = open(sys.argv[1], "rb").read()
+          pe = struct.unpack_from("<I", d, 0x3c)[0]
+          assert d[pe:pe+4] == b"PE\0\0", "not a PE file"
+          opt = pe + 24
+          magic, = struct.unpack_from("<H", d, opt)
+          sub, = struct.unpack_from("<H", d, opt + 68)
+          assert magic == 0x20b, f"not 64-bit (optional header magic {magic:#x})"
+          assert sub == 2, f"subsystem {sub}, wanted 2 (GUI, no console window)"
+          print("breakup.exe: PE32+, GUI subsystem")
+          PY
+
+          imports=$(x86_64-w64-mingw32-objdump -p "$payload/breakup.exe" \
+              | sed -n 's/^\tDLL Name: //p' | sort -u)
+          echo "$imports" | sed 's/^/import: /'
+          unexpected=$(echo "$imports" | grep -viE \
+              '^(KERNEL32\.dll|SDL3\.dll|SDL3_ttf\.dll|SDL3_mixer\.dll|api-ms-win-crt-[a-z0-9-]+\.dll)$' \
+              || true)
+          if [ -n "$unexpected" ]; then
+              echo "the exe imports something the payload does not carry:" >&2
+              echo "$unexpected" >&2
+              exit 1
+          fi
+          # Removed for the same reason build_windows.sh removes its staging
+          # tree: the upload step globs dist/, and a loose copy of the payload
+          # beside the archive is how the wrong thing gets attached to a run.
+          rm -rf dist/unpacked
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: dist/Breakup-*-windows-x64.zip
+          if-no-files-found: error
+
+  linux:
+    name: linux x86_64
+    # Pinned, not `ubuntu-latest`, and the reason is a promise made to players
+    # rather than reproducibility in the abstract. A payload's glibc floor is
+    # whatever the machine that linked it had, so this archive starts on Ubuntu
+    # 24.04's glibc 2.39 and newer and on nothing older. On `ubuntu-latest` that
+    # floor rises the day GitHub rolls the label over, silently, and a player on
+    # an older distribution gets an error naming nothing they can act on.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      # SDL turns a missing X extension into a hard configure error rather than a
+      # backend it goes without, so this list is what a player's SDL has to have
+      # been built with: the two window systems, input, the two audio servers, and
+      # libdecor for a Wayland titlebar.
+      #
+      # **Every X extension SDL asks about is named here, including the two that
+      # arrive by accident.** `libxtst-dev` is easy to leave out and kills the
+      # job on `Couldn't find dependency package for XTEST` after twenty lines of
+      # successful checks; `libxrender-dev` is usually present only because
+      # `libxcursor-dev` depends on it, which is one apt resolution away from
+      # costing a release. `preflight_x11` in packaging/build_linux.sh names
+      # whichever is missing in one line instead of leaving cmake to say it in
+      # twenty.
+      #
+      # `xxd` is not SDL's: embed_assets.sh writes the font and the levels into
+      # the binary with it.
+      - name: Install what SDL needs to build with a screen in it
+        run: |
+          sudo apt-get update -o Acquire::Retries=3
+          sudo apt-get install -y --no-install-recommends \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
+            libxfixes-dev libxrender-dev libxss-dev libxtst-dev \
+            libxkbcommon-dev \
+            libwayland-dev wayland-protocols libdecor-0-dev \
+            libgl1-mesa-dev libegl1-mesa-dev libgbm-dev libdrm-dev \
+            libasound2-dev libpulse-dev \
+            cmake xxd
+
+      # Three libraries built from source is most of this job's wall clock and
+      # none of its point. The key is the pins file, so the cache is thrown away
+      # exactly when a version moves and not otherwise — build_linux.sh's own
+      # marker is the installed .so, so a restored prefix skips straight to the
+      # game.
+      - name: Restore the pinned SDL build
+        uses: actions/cache@v4
+        with:
+          path: build/sdl3-linux
+          key: sdl3-linux-ubuntu24.04-${{ hashFiles('packaging/sdl3_pins.sh') }}
+
+      - name: make linux
+        run: make linux
+
+      # Started before it is handed to anybody, on the dummy video and audio
+      # drivers — the only check available to a runner with no screen and no
+      # sound card. `BREAKUP_SHOT` renders one frame, writes it out and quits,
+      # which walks the whole startup path: SDL, SDL_ttf opening the embedded
+      # font, SDL_mixer taking the synthesized sound effects and opening the nineteen
+      # embedded Ogg Vorbis tracks, and a renderer producing pixels.
+      #
+      # It is the *payload's* binary rather than a fresh build, because what is
+      # worth proving is the artefact: that it finds the three libraries
+      # travelling beside it. An rpath of `$ORIGIN/lib` is easy to get wrong in a
+      # way that only shows up on a machine other than the one that built it.
+      #
+      # And it unpacks the archive rather than reading the staging tree, because
+      # the last thing build_linux.sh does before printing "upload this" is
+      # `rm -rf dist/stage` — deliberately, so dist/ does not hold the payload
+      # twice. A step that consumed the staging tree would be a step consuming an
+      # intermediate the step before it is documented as destroying, and it would
+      # fail every time. Unpacking is also the stronger question: it proves tar
+      # kept the executable bit and the lib/ beside it.
+      - name: Start the payload
+        run: |
+          set -euo pipefail
+          archive=$(ls dist/Breakup-*-linux-x86_64.tar.gz)
+          rm -rf dist/unpacked && mkdir -p dist/unpacked
+          tar -C dist/unpacked -xzf "$archive"
+          payload=$(cd "$(ls -d dist/unpacked/Breakup-*-linux-x86_64)" && pwd)
+          test -x "$payload/breakup" || {
+              echo "payload lost its executable bit in the tarball" >&2
+              exit 1
+          }
+
+          # Every dependency has to resolve, and the three that travel in the
+          # payload have to resolve *to the payload* rather than to something
+          # this runner happens to have installed.
+          ldd "$payload/breakup" | sed 's/^/ldd: /'
+          if ldd "$payload/breakup" | grep -q 'not found'; then
+              echo "the payload cannot find a library it needs" >&2
+              exit 1
+          fi
+          for lib in libSDL3.so.0 libSDL3_ttf.so.0 libSDL3_mixer.so.0; do
+              ldd "$payload/breakup" | grep "$lib" | grep -q "$payload/lib/" || {
+                  echo "$lib did not resolve inside the payload" >&2
+                  exit 1
+              }
+          done
+
+          SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy \
+          BREAKUP_STATE=menu BREAKUP_SHOT=30:"$PWD/dist/smoke.bmp" \
+              "$payload/breakup"
+          test -s dist/smoke.bmp || {
+              echo "the game exited without writing a frame" >&2
+              exit 1
+          }
+          echo "rendered $(du -h dist/smoke.bmp | cut -f1) of pixels"
+          rm -rf dist/unpacked dist/smoke.bmp
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64
+          path: dist/Breakup-*-linux-x86_64.tar.gz
+          if-no-files-found: error

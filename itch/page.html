@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Breakup — itch.io page copy</title>
+    <style>
+      body {
+        max-width: 44rem;
+        margin: 3rem auto;
+        padding: 0 1.5rem;
+        font:
+          16px/1.55 -apple-system,
+          Segoe UI,
+          system-ui,
+          sans-serif;
+        color: #1b2331;
+        background: #fff;
+      }
+      h1 {
+        font-size: 2rem;
+        margin-bottom: 0.2rem;
+      }
+      h2 {
+        font-size: 1.25rem;
+        margin-top: 2rem;
+      }
+      code {
+        background: #eef1f5;
+        padding: 0.1em 0.3em;
+        border-radius: 3px;
+      }
+      li {
+        margin: 0.4rem 0;
+      }
+      hr {
+        border: 0;
+        border-top: 1px solid #d7dde5;
+        margin: 2rem 0;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Breakup</h1>
+    <p><strong>Twenty towers of neon brick. No art files.</strong></p>
+    <p>
+      Breakup is a brick-breaker in the arcade tradition — a paddle, a ball, a
+      wall that comes apart — built as one C binary that ships with no pictures
+      in it. Every brick, every glow, every nebula behind the field is drawn by
+      code in the second the game starts, and every sound effect — the click of
+      a brick, the crack of a crystal, the jingle when a level falls — is
+      synthesised by a small chiptune engine in that same second. There is no
+      sprite sheet in the download because there is no sprite sheet anywhere.
+    </p>
+    <p>
+      The soundtrack is the one thing that is played rather than computed:
+      nineteen looping chiptune tracks by <strong>Abstraction</strong> — every
+      song on his public-domain album <em>Three Red Hearts</em> — built into the
+      executable like everything else. No music folder, no files to lose — the
+      game and its soundtrack are the same file.
+    </p>
+    <p>
+      What that buys is not a smaller download. It is that the twenty levels are
+      the only thing anybody had to build by hand — and all twenty were built a
+      character at a time.
+    </p>
+    <hr />
+    <h2>What you actually do</h2>
+    <p>
+      A level is a tower rather than a screen: fifteen bricks wide, thirty to
+      sixty rows tall, with the camera climbing it as the ball does. You are not
+      clearing every brick. You are after the crystals, and everything else in
+      the tower is either in the way or a tool.
+    </p>
+    <ul>
+      <li>
+        <strong>Seven kinds of brick, and not all of them break.</strong> Basic
+        goes in one hit for 100, durable in two for 200, tough in three for 300.
+        Steel never goes at all and pays nothing — it is the shape of the room
+        you are playing in, and learning to bank off it is most of a level like
+        Bastion or Foundry. Gold is 500 for a single hit. Explosive takes its
+        neighbours with it a seventh of a second later, and they take theirs, so
+        one ball into the right cell of Furnace brings down more of that tower
+        than you had planned. The crystals are what you are actually here for,
+        at 1000 each: shatter every one and the level ends, whatever else is
+        still standing.
+      </li>
+      <li>
+        <strong>Four kinds of enemy, and none of them can kill you.</strong> A
+        drifter wanders the field. A diver comes down at the paddle in a
+        serpentine line. A splitter breaks into two smaller ones when it is hit.
+        A saucer shoots, and its shot costs no life — it shrinks the paddle,
+        which is worse for longer. What enemies actually do is stand in the way
+        and knock your ball off the line you had. All four can be dealt with
+        four ways and the game pays differently for each: 400 for the lasers,
+        300 for the ball or for catching one in an explosion, and 50 for driving
+        the paddle into it, which is the cheap one and the satisfying one.
+      </li>
+      <li>
+        <strong>Nine power-ups, and the commonest one is the bad one.</strong>
+        About one brick in five drops a capsule: expand, laser, catch, extra
+        life, multiball, slow, fireball, a barrier across the floor — and
+        shrink, out of the same bricks in the same capsule, dark red with an
+        exclamation mark on it, and at sixteen percent of all drops the single
+        most likely thing to fall. Deciding <em>not</em> to catch one is a real
+        decision, and it has to be made while it falls.
+      </li>
+      <li>
+        <strong>A combo that pays you for not touching the ball.</strong> Every
+        brick broken before the ball comes back to the paddle raises a
+        multiplier, a step every five bricks, up to five times. That is the
+        whole scoring game: a tower taken in long chains pays several times what
+        the same tower pays played safe.
+      </li>
+      <li>
+        <strong
+          >Three lives, and a bonus for the ones you did not spend.</strong
+        >
+        Finish a level with lives in hand and they are paid out in points.
+      </li>
+    </ul>
+    <p>
+      Twenty levels across four worlds — Cyan Dawn, Emerald Drift, Ember Fields,
+      Violet Void — and each world has its own palette, its own sky and its own
+      four music tracks, which the levels in it walk through. The seven boss
+      fights share two themes of their own. They run from a single-screen
+      classic (First Steps) to a sixty-row tower with three saucers in it (The
+      Core).
+    </p>
+    <h2>What it remembers</h2>
+    <p>
+      Progress, settings and scores are kept in one small file in the usual
+      place for your platform, and nowhere else.
+    </p>
+    <p>
+      The level select unlocks as you go, and anything you have reached can be
+      started again from it directly. The high-score table keeps the best five
+      runs with the level each one ended on. The two volume sliders and the
+      fullscreen flag persist. Deleting that one file starts the whole game
+      over.
+    </p>
+    <h2>Controls</h2>
+    <ul>
+      <li>
+        Paddle on the <strong>mouse</strong> or on the
+        <strong>arrow keys</strong>, whichever you reach for — the game follows
+        whichever one moved last.
+      </li>
+      <li>
+        <strong>Space</strong> or a <strong>click</strong> serves the ball,
+        fires the lasers and lets go of a ball the paddle has caught.
+      </li>
+      <li>
+        <strong>Esc</strong> or <strong>P</strong> pauses; the pause menu can
+        resume, restart the level or leave for the main menu.
+      </li>
+      <li>
+        <strong>F</strong> goes fullscreen and back, at any moment, and it is
+        remembered. The picture is letterboxed rather than stretched, so nothing
+        ends up the wrong shape on a widescreen display.
+      </li>
+      <li>Music and sound effects have separate volumes in the options.</li>
+    </ul>
+    <h2>Under it</h2>
+    <p>
+      One binary, no asset folder. The graphics are generated at startup —
+      bricks, paddle, ball, the glow on all three, the four world skies and
+      their parallax starfields — and every sound effect is a chiptune engine
+      synthesising it into raw PCM before the title screen appears. The font,
+      the twenty-seven level files and the nineteen music tracks are compiled
+      into the executable, so what you unpack is the game and the SDL it was
+      built against and nothing else — there is no asset folder to keep beside
+      it and nothing to install.
+    </p>
+    <p>
+      The levels themselves are plain text, fifteen characters to a row, one
+      letter per brick. Editing one is editing a text file; a twenty-eighth is a
+      file and a <code>make</code>.
+    </p>
+    <p>
+      It is C17 against SDL3, it opens in an 800×600 window, and it does not
+      touch the network.
+    </p>
+    <p>
+      The version on this page is the same C compiled to WebAssembly, soundtrack
+      and all — the whole game in a tab, with nothing to download and nothing to
+      unblock. It keeps your volumes, your unlocked levels and your high scores
+      in the browser, so closing the tab does not start you over.
+    </p>
+    <p>
+      Music is <em>Three Red Hearts</em> by <strong>Abstraction</strong>,
+      released into the public domain (CC0):
+      <strong
+        ><a href="https://tallbeard.itch.io/music-loop-bundle"
+          >https://tallbeard.itch.io/music-loop-bundle</a
+        ></strong
+      >
+    </p>
+    <p>
+      The source is public and MIT licensed:
+      <strong
+        ><a href="https://github.com/RobertLib/breakup"
+          >https://github.com/RobertLib/breakup</a
+        ></strong
+      >
+    </p>
+    <p>
+      It is free. If it was worth an evening to you the donate button is there,
+      and thank you — but the download is not waiting on it.
+    </p>
+  </body>
+</html>
