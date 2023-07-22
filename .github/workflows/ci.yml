@@ -1,0 +1,141 @@
+# The checks that run on a commit, as opposed to the archives that get handed
+# to players.
+#
+# The split from payloads.yml is deliberate and worth stating: **this workflow
+# produces nothing.** No artifacts, no uploads, no release. It builds the game,
+# runs the tests and cross-builds for Windows, and its only output is a green
+# tick or a red cross on the commit. payloads.yml is the other half — it is the
+# one that cuts archives, it starts on nothing but somebody pressing the button,
+# and it stays that way.
+#
+# Three jobs, and each is here to catch something the others cannot:
+#
+#   **tests** runs on macOS because that is the one runner where SDL3 is a
+#   package rather than a twenty-minute source build. SDL3 is new enough that
+#   Ubuntu 24.04 does not carry it — which is the whole reason
+#   packaging/build_linux.sh compiles it from the pins — and a check that takes
+#   twenty minutes to tell you about a typo is a check people learn to ignore.
+#   Homebrew has all three libraries, so this is a couple of minutes.
+#
+#   **windows-crossbuild** runs on Linux with mingw-w64, and it is here for
+#   portability rather than for Windows. `M_PI` is not in ISO C and mingw does
+#   not hand it out under `-std=c17`; that was found by cross-building, not by
+#   anything a Mac ever said. A second compiler and a second libc on every push
+#   is what turns the next one of those into a red cross on the commit that
+#   caused it rather than a surprise on release day.
+#
+#   **shellcheck** reads the build scripts. Everything that turns this tree
+#   into an archive is bash, and a quoting mistake in one of them is a
+#   release that packs the wrong thing rather than a compile error.
+#
+# The macOS release build is in none of them: it is signed with a Developer ID and
+# notarized by Apple, and both live in a keychain on one machine. `make mac` is
+# that build.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A second push to the same branch makes the first one's answer worthless, so
+# it is cancelled rather than left to finish. Not for `main`, where every commit
+# should have its own recorded result.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  tests:
+    name: build and test
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      # xxd is not listed: it ships with vim and macOS has it. embed_assets.sh
+      # checks for it by name and says so if that ever stops being true.
+      - name: Install SDL3
+        run: brew install sdl3 sdl3_ttf sdl3_mixer
+
+      # The tests bring up no window, no renderer and no mixer, so they need
+      # neither a screen nor a sound card — but they do parse the real level
+      # files out of the embedded header, which means this also proves the
+      # assets embedded.
+      - name: make test
+        run: make test CFLAGS_BASE="-std=c17 -Wall -Wextra -Wpedantic -Werror $(pkg-config --cflags sdl3 sdl3-ttf sdl3-mixer)"
+
+      # Warnings are not errors in the makefile, because a developer mid-change
+      # should not be stopped by one. They are errors here, for the tests above
+      # as well as the release: -Wall -Wextra -Wpedantic is clean on this tree
+      # today and the cheapest way to keep it that way is to fail the commit
+      # that spoils it.
+      - name: make release, warnings fatal
+        run: make release CFLAGS_BASE="-std=c17 -Wall -Wextra -Wpedantic -Werror $(pkg-config --cflags sdl3 sdl3-ttf sdl3-mixer)"
+
+      # One frame, on the dummy drivers, which is the whole startup path: SDL,
+      # SDL_ttf opening the embedded font, SDL_mixer taking the synthesized
+      # sound effects and the nineteen embedded Ogg Vorbis tracks, and a
+      # renderer producing pixels. It is the same check payloads.yml runs
+      # against the Linux archive, and the reason it is worth having twice is
+      # that this one runs on every commit.
+      - name: Start the game and render a frame
+        run: |
+          set -euo pipefail
+          SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy \
+          BREAKUP_STATE=menu BREAKUP_SHOT=30:"$PWD/smoke.bmp" ./breakup
+          test -s smoke.bmp || { echo "the game exited without writing a frame" >&2; exit 1; }
+          rm -f smoke.bmp
+
+  windows-crossbuild:
+    name: windows cross-build (mingw-w64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mingw-w64
+        run: |
+          sudo apt-get update -o Acquire::Retries=3
+          sudo apt-get install -y --no-install-recommends mingw-w64 zip xxd
+
+      # The archive this writes into dist/ is thrown away with the runner. What
+      # is being asked is only whether the tree still compiles and links with a
+      # compiler that is not clang and a libc that is not Apple's.
+      #
+      # The triplet is chosen the way payloads.yml chooses it — the UCRT one
+      # when the package carries it, the default otherwise — so this cross-build
+      # is a rehearsal of that one rather than of a different toolchain.
+      - name: make win
+        run: |
+          set -euo pipefail
+          triple=x86_64-w64-mingw32
+          if command -v x86_64-w64-mingw32ucrt-gcc >/dev/null 2>&1; then
+              triple=x86_64-w64-mingw32ucrt
+          fi
+          echo "mingw triplet: $triple"
+          MINGW_TRIPLE=$triple make win
+
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update -o Acquire::Retries=3
+          sudo apt-get install -y --no-install-recommends shellcheck
+
+      # Advisory for now: nothing in this tree has been run through shellcheck
+      # on the machine that wrote it, so the first run is a reading rather than
+      # a gate. Drop `continue-on-error` once it is clean.
+      - name: shellcheck the build scripts
+        continue-on-error: true
+        run: shellcheck embed_assets.sh packaging/*.sh tools/press_kit.sh

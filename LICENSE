@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2023 Robert Libšanský
+Copyright (c) 2023-2026 Robert Libšanský
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -19,3 +19,10 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---
+
+This licence covers the source, the level files and the documentation in this
+repository. It does not cover assets/font.ttf, which is PC Senior by codeman38
+and is redistributed here under its own terms, nor assets/music/, which is
+Three Red Hearts by Abstraction and is CC0 — see NOTICE.md for both.

@@ -1,0 +1,293 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>@BREAKUP_TITLE@</title>
+<!-- An empty one, because a page that does not say stops the browser asking:
+     without this every load of the game logs a 404 for a favicon.ico that was
+     never going to be in an itch.io payload. -->
+<link rel="icon" href="data:,">
+<!--
+  The page itch.io serves. `packaging/build_web.sh` fills the placeholders in
+  and writes it out as index.html, which is the one filename an itch.io HTML5
+  upload is allowed to have at the root of its zip.
+
+  Four things here are load-bearing rather than decoration, and each is a rule
+  from somebody else's documentation or a measurement rather than a taste:
+
+  - The canvas carries no border and no padding. SDL's own
+    docs/README-emscripten.md says so in as many words ("things will break in
+    unexpected ways"), because the mouse coordinates it computes come off the
+    element's box.
+
+  - The canvas fills its frame and *SDL* does the scaling. SDL's emscripten
+    backend looks at the canvas's CSS size when the window is created and, if
+    anything is sizing it, takes that as the window size rather than the
+    800x600 the game asked for (`external_size` in SDL_emscriptenvideo.c). The
+    game then letterboxes its logical 800x600 into it with
+    SDL_LOGICAL_PRESENTATION_LETTERBOX, which is exactly what it does
+    fullscreen on a desktop — so a tab behaves like the game rather than like a
+    stricter cousin of it, at any shape of frame, with no aspect-ratio
+    arithmetic in this page. At the 800x600 viewport itch.io is told to use it
+    is 1:1 and nothing is scaled at all.
+
+    **The frame does not keep the size it started at, and the flags that let
+    SDL keep up with it are in src/main.c rather than here.** itch.io's
+    fullscreen button calls requestFullscreen() on the iframe this page is
+    served in — `enter_fullscreen` in its game.min.js, which is
+    `el.find(".game_frame iframe")` and nothing else — so the viewport goes
+    from the 800x600 the shop was told to use to the size of a display, with no
+    say from inside. Everything below follows it, because it is all sized in
+    per cent of a viewport that just changed; SDL follows it only for a window
+    that is resizable, and it only leaves the canvas's CSS size alone at all
+    while it believes something else is setting it. Both of those are decided
+    at SDL_CreateWindow, both are commented where they are asked for, and
+    getting either wrong looks the same from here: a game that goes fullscreen
+    into 800x600 in the top left corner of a black screen.
+
+  - The game is not started on load. `-sINVOKE_RUN=0` holds `main` back until
+    the click below, so that the first frame the player sees is also the first
+    frame allowed to make noise: a browser throws audio away until the page has
+    been interacted with, and SDL will happily open a device and feed silence
+    into it for as long as that lasts. Starting on the click is SDL's own
+    suggestion for a game with no volume control on its first screen.
+
+  - **The .wasm is downloaded by this page rather than by emscripten, and that
+    is for the progress bar.** This game carries its soundtrack — nineteen Ogg
+    Vorbis tracks, some eighteen megabytes — inside the binary, exactly as the
+    three desktop payloads do, so the .wasm is a big file by the standards of a
+    web page. Emscripten fetches it with streaming instantiation and reports no
+    progress while it does, which is half a minute of a button that says
+    LOADING and a bar that has not moved: the player's own conclusion is that
+    the page is broken, and they are not wrong to reach it. Read as a stream
+    here, the bar is the download.
+
+    `Module.instantiateWasm` is the hook the bytes then go through, and it is
+    the right one of the two that would work: `Module.wasmBinary` is refused
+    unless the *link line* also carries it in `INCOMING_MODULE_JS_API`, so a
+    page using it aborts with a message about a setting rather than starting.
+    `instantiateWasm` is in emscripten's default list, which keeps the whole of
+    this arrangement inside this file.
+-->
+<style>
+  :root { color-scheme: dark; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #05070c;
+    color: #c8d0dc;
+    font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  #frame {
+    position: absolute;
+    inset: 0;
+  }
+  /* No border, no padding. See the note at the top of this file. */
+  canvas#canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    border: 0;
+    padding: 0;
+    background: #000;
+    /* Does nothing while SDL keeps the backing store equal to this box, which
+       is every case measured. It is here for the one where that stops being
+       true — a device pixel ratio SDL decides to honour — because the wrong
+       answer there is a blurred picture rather than a broken one, and nobody
+       would notice. */
+    image-rendering: pixelated;
+    outline: none;
+    /* Hidden until the run starts, so the player never sees an empty black
+       rectangle sitting under the button they have not pressed yet. It stays
+       laid out at its full size, which matters: SDL reads this element's CSS
+       size to decide how big the window is, and it does so on the click. */
+    visibility: hidden;
+  }
+  body.running canvas#canvas { visibility: visible; }
+  #veil {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    background: #05070c;
+    text-align: center;
+    padding: 24px;
+    box-sizing: border-box;
+  }
+  body.running #veil { display: none; }
+  #title {
+    font-size: 30px;
+    letter-spacing: 0.42em;
+    /* The margin balances the letter-spacing, which is applied after the last
+       glyph as well and would otherwise push the word off centre. */
+    margin-right: -0.42em;
+    color: #7ad7ff;
+    font-weight: 700;
+  }
+  #play {
+    font: inherit;
+    font-size: 15px;
+    letter-spacing: 0.2em;
+    margin-right: -0.2em;
+    padding: 12px 26px;
+    color: #05070c;
+    background: #7ad7ff;
+    border: 0;
+    cursor: pointer;
+  }
+  #play:disabled { background: #2a3242; color: #7c8797; cursor: default; }
+  #play:not(:disabled):hover { background: #b6e9ff; }
+  #note { color: #5d6675; font-size: 12px; }
+  #bar { width: 260px; height: 3px; background: #1a212e; }
+  #bar > i { display: block; height: 100%; width: 0; background: #7ad7ff; }
+  body.running #bar { display: none; }
+</style>
+
+<div id="frame"><canvas id="canvas" tabindex="-1"></canvas></div>
+
+<div id="veil">
+  <div id="title">@BREAKUP_NAME_UPPER@</div>
+  <button id="play" disabled>LOADING</button>
+  <div id="bar"><i></i></div>
+  <div id="note">Arrows or mouse. F for fullscreen.</div>
+</div>
+
+<script>
+  var SCREEN_WIDTH = @SCREEN_WIDTH@, SCREEN_HEIGHT = @SCREEN_HEIGHT@;
+  var canvas = document.getElementById('canvas');
+  var play = document.getElementById('play');
+  var note = document.getElementById('note');
+  var bar = document.querySelector('#bar > i');
+
+  /* The size the game draws at, before SDL has had an opinion. From here the
+     canvas is CSS-sized to its frame and SDL keeps up; see the note at the top
+     of this file for why there is no scaling arithmetic in this page. */
+  canvas.width = SCREEN_WIDTH;
+  canvas.height = SCREEN_HEIGHT;
+
+  /* Arrow keys and space scroll a page, and on itch.io this page is an iframe
+     inside a much taller one. SDL stops the keys it handles from doing that,
+     but only once it is running and only for the element it listens on, so the
+     window gets the same refusal for the whole time the game is up. Anything
+     with a modifier is left alone: those are the browser's own shortcuts and
+     taking them is how a page stops being closeable. */
+  var SWALLOW = {
+    ArrowUp: 1, ArrowDown: 1, ArrowLeft: 1, ArrowRight: 1,
+    Space: 1, PageUp: 1, PageDown: 1, Home: 1, End: 1, Tab: 1
+  };
+  window.addEventListener('keydown', function (e) {
+    if (!document.body.classList.contains('running')) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (SWALLOW[e.code]) e.preventDefault();
+  }, { passive: false });
+
+  var Module = {
+    canvas: canvas,
+    /* The default emscripten shell prints to a textarea this page does not
+       have. SDL_Log, printf and everything src/ writes to stderr go to the
+       browser console instead, which is where SDL's README says to look. */
+    print: function (t) { console.log(t); },
+    printErr: function (t) { console.error(t); },
+    onAbort: function (what) { failed('' + what); }
+  };
+
+  var started = false;
+
+  function failed(why) {
+    play.disabled = true;
+    play.textContent = 'FAILED TO START';
+    note.textContent = why + ' — WebGL and WebAssembly are both required.';
+  }
+
+  function progress(fraction) {
+    bar.style.width = (100 * Math.max(0, Math.min(1, fraction))) + '%';
+  }
+
+  function ready() {
+    if (started) return;
+    progress(1);
+    play.disabled = false;
+    play.textContent = 'PLAY';
+  }
+
+  /* The download, as a stream, so the bar means something. See the note at the
+     top of this file.
+
+     `total` is Content-Length, which on a server that compresses on the fly is
+     the compressed length while the bytes arriving here are not — hence the
+     clamp in progress(). Ogg Vorbis is most of this file and does not compress,
+     so the two are within a few per cent in practice. No Content-Length at all
+     (a chunked response) leaves the bar where it is and the button still
+     arrives; a bar that does not move is a smaller problem than a page that
+     never starts. */
+  fetch('@BREAKUP_WASM@')
+    .then(function (response) {
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+
+      var total = +response.headers.get('content-length');
+      if (!response.body || !total) return response.arrayBuffer();
+
+      var chunks = [], received = 0;
+      var reader = response.body.getReader();
+
+      return (function pump() {
+        return reader.read().then(function (r) {
+          if (r.done) {
+            var out = new Uint8Array(received), at = 0;
+            for (var i = 0; i < chunks.length; i++) {
+              out.set(chunks[i], at);
+              at += chunks[i].length;
+            }
+            return out.buffer;
+          }
+          chunks.push(r.value);
+          received += r.value.length;
+          progress(received / total);
+          return pump();
+        });
+      })();
+    })
+    .then(function (buffer) {
+      /* Returning an empty object is how this hook says "I will call you back":
+         emscripten then waits for successCallback instead of fetching anything
+         itself. */
+      Module.instantiateWasm = function (imports, successCallback) {
+        WebAssembly.instantiate(buffer, imports)
+          .then(function (out) { successCallback(out.instance, out.module); })
+          .catch(function (e) { failed('the module would not start (' + e.message + ')'); });
+        return {};
+      };
+
+      /* Only now, because the script starts instantiating as soon as it has
+         parsed and this is the whole point of fetching the bytes ourselves. */
+      var script = document.createElement('script');
+      script.src = '@BREAKUP_JS@';
+      script.onerror = function () { failed('could not load @BREAKUP_JS@'); };
+      document.body.appendChild(script);
+
+      Module.onRuntimeInitialized = ready;
+    })
+    .catch(function (e) { failed('could not load @BREAKUP_WASM@ (' + e.message + ')'); });
+
+  play.addEventListener('click', function () {
+    if (started || play.disabled) return;
+    started = true;
+    document.body.classList.add('running');
+    /* Focus so the keyboard reaches the game without a second click — which
+       matters on itch.io, where the game is an iframe the player has just
+       clicked into once already. */
+    canvas.focus();
+    Module.callMain([]);
+  });
+
+  /* There is deliberately no `onExit` here. This build offers no way out of
+     itself — BREAKUP_OFFERS_QUIT is nought under emscripten, so the menu has no
+     QUIT row and ESC on that page does nothing — and the main loop keeps the
+     runtime alive after main returns anyway, so the hook could not fire. A
+     handler for a case that cannot happen is a handler nobody has seen work. */
+</script>
