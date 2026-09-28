@@ -1,6 +1,9 @@
-# BREAKUP — a neon arcade classic
+# BREAKUP — a neon arcade roguelite
 
-A polished, release-ready brick-breaker game written in C with SDL3. All graphics
+A brick-breaker played as a roguelite, written in C with SDL3. Every game is a
+run: four acts of hand-designed levels drawn in a new order each time, a perk
+to take after every level, a boss at the end of every act and a choice after
+each one — cash out, or go deeper for more. All graphics
 are generated procedurally at startup (no image assets), and every sound effect
 and jingle is synthesized in code by a small built-in chiptune engine. The music
 is nineteen looping tracks from Abstraction's public-domain chiptune album
@@ -13,18 +16,58 @@ rather than shipped beside it. That is every distinct song in the pack. See
 
 ## Features
 
-- **20 hand-designed levels** across 4 themed worlds (Cyan Dawn, Emerald
-  Drift, Ember Fields, Violet Void), from single-screen classics to tall
-  scrolling towers, with **a boss fight after every third one** (and the last of
-  them, The Sovereign, closing the game after the twentieth) — 27 levels in
-  all. Levels are plain text files — easy to edit and mod.
+- **A run is the game** — four acts, one per themed world (Cyan Dawn, Emerald
+  Drift, Ember Fields, Violet Void), each three levels and a boss. The levels
+  are drawn from that world's pool in a new order every time and, from the
+  second act on, often under a **mutator** (mirrored, armored, brittle, gold
+  rush, swarm, surge). The fourth act ends with The Sovereign, and beating it
+  wins the run — or carries on into endless acts drawn from the whole game.
+  See [How a run works](#how-a-run-works).
+- **The Sovereign speaks** — the being at the end of the fourth act built
+  every world the run passes through, and it has something to say about each
+  one. It is a face drawn in glowing 3D vector lines, with a halo turning
+  behind it, that drifts over a tunnel of them, turns towards what it is
+  writing and writes it a letter at a time with a beam from the eye in its
+  forehead. Its voice is five sung vowels synthesized at startup, one per
+  syllable, pitched from the word being said — the melody of speech with
+  nothing in it to understand. It opens every run (the whole story the first
+  time, a line of greeting after that — it counts your attempts), comes in
+  between every two stages with a line about what is next over a map of the
+  run, names each boss and the one thing worth knowing about it, reacts to
+  the mutator, the curse just taken and the warden just beaten, comes apart
+  when its core does, and has the last word over a run that dies or cashes
+  out. The further a run gets the more of its thoughts it has lost, and the
+  worse its face holds together. SPACE turns a page, ESC skips the scene, and
+  OPTIONS > STORY switches all of it off.
+
+  It is not only between the levels. It writes the title of the game when it
+  starts, and says it. It looms over the menu with its eyes on whatever the
+  cursor is on — and minds when that is QUIT. It hangs faint in the back of
+  every ordinary level watching the ball, flinches when a crystal breaks and
+  enjoys a life lost. On the last fight it is the core itself, and every hit
+  on the crystal is a hit on its face, until the face comes apart with it.
+  Its stylus is the cursor in every menu, and its scan line is the way one
+  screen turns into the next.
+- **Perks** — after every level, one of three to keep for the rest of the run:
+  fourteen of them, each a rule that hooks into something the game already
+  does, so they stack into combinations. Six are earned by playing: beat The
+  Gyre, detonate eight explosive bricks in one level, and so on. The PERKS page
+  says what each one takes.
+- **Cash out or go deeper** — after every boss. Going deeper raises the score
+  multiplier and adds a curse that stays for the rest of the run, and half of
+  what you score from there is lost if you die before the next chance to cash
+  out.
+- **Daily run** — one seed per date, the same run for everybody, with its own
+  best score. Entirely offline: the seed is the date.
+- **20 hand-designed levels and 7 bosses**, from single-screen classics to
+  tall scrolling towers. Levels are plain text files — easy to edit and mod.
 - **7 brick types**: basic, durable (2 hits), tough (3 hits), indestructible
   steel, explosive (chain reactions!), gold bonus bricks, and the crystal —
   destroy all crystals to clear a level.
 - **4 enemy types**: drifters that wander the field, divers that hunt your
   paddle, splitters that break into two minis, and saucers that shoot back.
-- **7 boss fights**: one after every third level, and the seventh as the finale.
-  A boss is the game's own
+- **7 boss fights**: two to a tier, so each act's is one of a pair, and The
+  Sovereign alone at the end of the fourth. A boss is the game's own
   vocabulary turned on the player: a crystal — the thing every other level asks
   you to break — behind a ring of armour plates that look like bricks and orbit
   it. A plate takes the hit a brick would and gives nothing back; the crystal
@@ -40,18 +83,25 @@ rather than shipped beside it. That is every distinct song in the pack. See
   ring open and shut and fires in every direction at once. **The Stalker** comes
   down the screen after you. **The Sovereign** does all of it.
 - **9 power-ups**: Expand, Laser, Catch, Extra Life, Multiball, Slow,
-  Fireball, Barrier — and the dreaded Shrink.
+  Fireball, Barrier — and Shrink, which is a gamble rather than a plain
+  punishment: while the paddle is small, the combo multiplier is one higher.
 - **Combo scoring** — chain brick hits without touching the paddle for up to
   a 5× multiplier. Each unbroken link breaks a semitone higher than the one
   before it, so a long chain climbs a scale rather than repeating a noise, and
-  every step of the multiplier announces itself.
+  every step of the multiplier announces itself. Explosions pay out at the
+  multiplier the ball built, so a chain reaction is worth setting up, and an
+  enemy caught in a blast drops a capsule.
+- **GIF clips** — press **G** to save the last eight seconds of play as a
+  looping GIF in `Pictures/Breakup`. The game keeps the last eight seconds at
+  half size all the time, so the moment worth keeping is already recorded by
+  the time you reach for the key. (Not in the browser build.)
 - **Juice**: a bloom pass over the whole field, hit stop on the heavy impacts,
   a camera that shakes in both axes, rolls and leans into a hit, debris thrown
   along the line of the blow, floating score popups, ball trails, and animated
   backgrounds with parallax starfields.
-- **Full game flow**: animated intro, main menu, level select with unlock
-  progression, options (music/SFX volume, fullscreen), high-score table,
-  pause menu. Progress and settings persist between sessions.
+- **Full game flow**: animated intro, main menu, the perk collection, options
+  (music/SFX volume, fullscreen, story), a table of the best runs and today's daily,
+  pause menu. Unlocked perks, scores and settings persist between sessions.
 
 ## Controls
 
@@ -60,6 +110,10 @@ rather than shipped beside it. That is every distinct song in the pack. See
 | Mouse / ← →    | Move the paddle                                 |
 | Space / Click  | Launch ball, shoot lasers, release caught balls |
 | Esc / P        | Pause                                           |
+| G              | Save the last 8 seconds as a GIF                |
+| 1 2 3          | Take a perk between levels                      |
+| Space / Enter  | Write out / turn a page of the Sovereign's      |
+| Esc            | Skip the Sovereign's scene                      |
 | F              | Toggle fullscreen                               |
 | Arrows + Enter | Navigate menus                                  |
 
@@ -91,8 +145,15 @@ without a display: the arithmetic in `src/globals.h` (including what a clamp
 does with a NaN, which is what stands between a hand-edited save file and
 undefined behaviour), the level files as they actually ship — every level
 named, every one of them finishable, the world and music tables landing inside
-their arrays — and the unlock and high-score logic. It runs with the save file
-switched off, so it cannot touch your own progress.
+their arrays — the high-score table, and the run: its random number
+generator against the PCG reference output, a run as a function of its seed
+(the same levels, mutators and offers every time, from the right pools), what
+going deeper costs, what winning pays and what unlocks each perk. Every line
+the Sovereign can say is held to the size of its page and to the glyphs it is
+drawn from, and so is every page its scenes can put together, for every act,
+stage, boss, mutator, curse and ending. The GIF writer is checked by
+decoding what it writes with an LZW decoder of the test's own. It runs with the
+save file switched off, so it cannot touch your own progress.
 
 Everything else is still checked by playing it, and by
 [`BREAKUP_AUTOPLAY`](#development-helpers) under a sanitizer: `make sanitize`
@@ -243,7 +304,7 @@ SDL3, SDL3_ttf and SDL3_mixer are built from the pinned release tags into
 dependencies switched off as the Linux payload. One cmake flag is the reason they
 are built from source at all: `SDL_EMSCRIPTEN_PERSISTENT_PATH` makes SDL mount the
 browser's IndexedDB over `SDL_GetPrefPath()` and wait for it before `main` runs,
-which is the whole of whether a player's settings, unlocked levels and high scores
+which is the whole of whether a player's settings, unlocked perks and high scores
 survive closing the tab. `src/lib/save.c` is untouched by any of it.
 
 Two things the browser build does differently in the source. `main()` hands the
@@ -269,7 +330,7 @@ make press     # -> dist/press/ (screenshots, cover, GIFs, wallpaper, MANIFEST.t
 There is no art in this repository to crop for a store page: every pixel is drawn
 at runtime, so the only place a picture of this game exists is the back buffer of
 a running process. [`tools/press_kit.sh`](tools/press_kit.sh) photographs it
-there — seventeen stills at native size and at 2x, four GIFs, the itch.io cover and
+there — nineteen stills at native size and at 2x, four GIFs, the itch.io cover and
 a wallpaper — which means the pictures can be _rebuilt_ after a change to the art
 instead of being re-photographed by hand and quietly left a version behind.
 
@@ -278,6 +339,61 @@ so the captures are real play rather than an idling background. The picture at t
 top of this file is one of them — `make press` refreshes it too, so it cannot
 quietly end up a version behind the game. Everything else the store page needs,
 and what to do with it, is in [`itch/`](itch/README.md).
+
+## How a run works
+
+Four acts of four stages, each three levels and a boss. The first act draws
+from the first world's levels and from The Warden and The Gyre, the second from
+the second world and The Brood and The Binary, the third from the third world
+and The Pulsar and The Stalker, and the fourth from the last world and ends with
+The Sovereign. A level is not repeated until its pool runs dry, and the ball's
+launch speed follows the stage, not the file the stage drew.
+
+Beating The Sovereign wins the run and pays a victory bonus of 10,000 at the
+run's multiplier. The choice after it is FINISH — the run ends there, a win — or
+ENDLESS: acts drawn from the whole game, with a boss from the back half of it at
+the end of each, for as long as you last. A cash-out anywhere in the endless
+acts still counts as a win.
+
+The table of best runs keeps the score and the act each run reached. It is new
+with runs: the high scores of the 1.0 campaign were levels of a different game,
+and a save from then keeps its settings and starts the table empty.
+
+Everything that shapes a run — the levels, the mutators, the perks on offer and
+the curses — comes from a generator of the game's own (PCG32, in
+[`src/run/rng.c`](src/run/rng.c)) rather than from `rand()`, which is a
+different algorithm on each of the four platforms. That is what makes a daily
+run the same run everywhere. A daily also offers every perk, unlocked or not, so
+that two players of one date are playing the same game.
+
+Going deeper raises the score multiplier by 0.5 and adds one curse — OVERDRIVE
+(faster balls), HARDENED (basic bricks take two hits), DROUGHT (fewer capsules),
+NARROW (a shorter paddle) or HUNTED (enemies respawn faster) — and it marks a
+checkpoint: die, or abandon the run, before the next boss and half of what was
+scored since is lost. Cashing out, or finishing after The Sovereign, keeps it
+all.
+
+| Perk           | What it does                                                  | Unlocked by                           |
+| -------------- | ------------------------------------------------------------- | ------------------------------------- |
+| Gold Fever     | Gold bricks always drop a capsule                             | —                                     |
+| Magnet         | Falling capsules drift towards the paddle                     | —                                     |
+| Lucky          | Bricks drop capsules 50% more often                           | —                                     |
+| Overtime       | Every power-up lasts 50% longer                               | —                                     |
+| Safety Net     | The first ball lost in each level bounces back                | —                                     |
+| Soft Hands     | A ball caught by the Catch paddle keeps the combo             | —                                     |
+| Crystal Blast  | Crystals explode when they break                              | —                                     |
+| Tracer Rounds  | Laser hits score at the combo multiplier and build it         | —                                     |
+| Chain Reaction | Every brick an explosion breaks adds one to the combo         | Detonating 8 explosive bricks in a level |
+| Hunter         | Every enemy killed adds three to the combo                    | Killing 10 enemies in one level       |
+| Split Shot     | Every step up the combo launches an extra ball                | Reaching a combo of ×5                |
+| Glass Cannon   | The combo goes to ×8 instead of ×5, but balls are 15% faster  | Beating The Gyre                      |
+| Inferno        | While fireball is lit, explosions are 75% wider               | Beating The Pulsar                    |
+| Meltdown       | Fireball melts steel bricks                                   | Beating The Sovereign                 |
+| +1 Life        | One more life, on the spot                                    | —                                     |
+
+A new perk goes at the end of the `Perk` enum in
+[`src/run/perks.h`](src/run/perks.h), before `PERK_EXTRA_LIFE`: the save keeps
+the unlocked ones as a bitmask indexed by it.
 
 ## Level format
 
@@ -305,23 +421,36 @@ becomes a ceiling a ball can rally off forever without ever reaching it.
 The worlds are the levels that are *not* boss fights, five at a time, so a boss
 belongs to the world it interrupts and inserting one does not renumber a world.
 
-Add a `level28.txt` and it shows up in the game automatically.
+Add a `level28.txt` and runs start drawing it: it joins the pool of the world
+it lands in, or the last world's once the four are full.
 
 ## Development helpers
 
 Environment variables understood by the binary (useful for testing, and what
 `make press` is built out of):
 
-- `BREAKUP_LEVEL=N` — jump straight into level N
-- `BREAKUP_STATE=intro|menu|levels|playing|gameover|win` — jump to a screen
+- `BREAKUP_LEVEL=N` — start a run on level N instead of the level it drew
+- `BREAKUP_STATE=intro|menu|playing|gameover|win` — jump to a screen
+  (`gameover` and `win` show the run-over screen with a made-up result)
 - `BREAKUP_AUTOPLAY=1` — the paddle tracks the ball automatically
 - `BREAKUP_SHOT=frame:path.bmp` — save a screenshot at a frame, then exit
 - `BREAKUP_SHOT_FRAMES=N` — write N frames from there on, `path-0000.bmp` up
 - `BREAKUP_SHOT_STEP=K` — keep every K-th frame of that burst
 - `BREAKUP_KEYS=frame:scancode,...` — inject key presses (44 is Space, 41 Esc)
 - `BREAKUP_SCORE=N` — start with N points
-- `BREAKUP_UNLOCKED=N` — pretend N levels have been unlocked (level select)
 - `BREAKUP_SEED=N` — seed the RNG instead of the clock
+- `BREAKUP_RUN=N` — start a run with seed N
+- `BREAKUP_RUN_STAGE=K` — …at its K-th stage, having gone deeper at each boss
+- `BREAKUP_OVERLAY=1` — …with the perk draft (or the cash-out) already open
+- `BREAKUP_RUN_PERKS=M` — …holding every perk in the bitmask M (`0x3fff` is all
+  fourteen, in the order of the table under
+  [How a run works](#how-a-run-works))
+- `BREAKUP_CLIP_DIR=path/` — write G's clips there instead of to Pictures
+- `BREAKUP_STORY=prologue|interlude|finale|epilogue` — open on that scene of
+  the Sovereign's: the first three over a run (with `BREAKUP_RUN_STAGE` for
+  the stage it is about), the epilogue over `BREAKUP_STATE=gameover`. Without
+  it, a run a helper starts has no prologue, so a capture of a level is a
+  capture of the level
 
 `BREAKUP_SHOT` makes the whole run a **scripted** one, and that is three things
 beyond writing a file. It reads and writes no save, so it plays with the settings

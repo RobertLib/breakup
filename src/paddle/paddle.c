@@ -12,8 +12,12 @@
 #include "../lib/game-state.h"
 #include "../lib/gfx.h"
 #include "../lib/particles.h"
+#include "../run/run.h"
 #include "../screens/playing-screen.h"
+#include "../story/story.h"
+#include "../story/presence.h"
 #include "../ui/floating-text.h"
+#include "../ui/run-overlay.h"
 
 Paddle paddle;
 
@@ -110,7 +114,9 @@ static void respawnOrGameOver(void)
   }
   else
   {
-    nextGameState = GAME_STATE_GAME_OVER_SCREEN;
+    storyRequestEpilogue();
+    runFinish(RUN_END_DIED, paddle.score);
+    nextGameState = GAME_STATE_RUN_OVER_SCREEN;
   }
 }
 
@@ -174,13 +180,21 @@ void setStartScore(int score)
   paddle.score = score;
 }
 
+float paddleTypeDuration(void)
+{
+  return PADDLE_TYPE_DURATION * runPowerUpDurationScale();
+}
+
 void changePaddleType(PaddleType type)
 {
   if (type == PADDLE_TYPE_LONG || type == PADDLE_TYPE_SHOOTING ||
       type == PADDLE_TYPE_STICKY || type == PADDLE_TYPE_SHORT)
   {
-    // Picking up (or refreshing) a timed type restarts its timer
+    // Picking up (or refreshing) a timed type restarts its timer - at the
+    // length OVERTIME has made it, which is read here so that a perk taken
+    // mid-run applies to the next capsule caught.
     returnTypeToDefaultTimer.elapsedTime = 0;
+    returnTypeToDefaultTimer.duration = paddleTypeDuration();
   }
 
   paddle.type = type;
@@ -193,7 +207,35 @@ float paddleTypeTimeLeft(void)
     return 0;
   }
 
-  return PADDLE_TYPE_DURATION - returnTypeToDefaultTimer.elapsedTime;
+  return returnTypeToDefaultTimer.duration - returnTypeToDefaultTimer.elapsedTime;
+}
+
+void paddleGoToLevel(int level)
+{
+  reset();
+
+  // Move the paddle below the level content
+  paddle.pos.y = paddleYForLevel(level);
+
+  resetBalls();
+  resetEffects();
+  resetBrickItems();
+  resetCombo();
+  clearParticles();
+  clearFloatingTexts();
+
+  destroyBricks();
+  destroyEnemies();
+
+  paddle.level = level;
+
+  initializeBricks();
+  initializeEnemies();
+  initializeBoss();
+  initializeCamera();
+  presenceBegin();
+
+  playMusic(musicForLevel(paddle.level));
 }
 
 void paddleNextLevelUpdate(void)
@@ -203,40 +245,22 @@ void paddleNextLevelUpdate(void)
     return;
   }
 
-  // If the player has completed all levels
-  if (paddle.level < getNumberOfLevels() - 1)
-  {
-    reset();
-
-    // Move the paddle below the level content
-    paddle.pos.y = paddleYForLevel(paddle.level + 1);
-
-    resetBalls();
-    resetEffects();
-    resetBrickItems();
-    resetCombo();
-    clearParticles();
-    clearFloatingTexts();
-
-    destroyBricks();
-    destroyEnemies();
-
-    // Increase the level
-    paddle.level++;
-
-    initializeBricks();
-    initializeEnemies();
-    initializeBoss();
-    initializeCamera();
-
-    playMusic(musicForLevel(paddle.level));
-  }
-  else
-  {
-    nextGameState = GAME_STATE_WIN_SCREEN;
-  }
-
   paddle.nextLevel = false;
+
+  // The game does not go on to the next file: it stops on the level it has
+  // just cleared, under the perk draft or the cash-out choice, and the overlay
+  // moves it on to whatever the run draws next once the player has chosen.
+  //
+  // Except once. When the level just cleared was The Sovereign at the end of
+  // the fourth act, the being has something to say first, and the choice to
+  // finish or go on comes up when it has finished saying it.
+  if (runAtFinale())
+  {
+    storyPlayFinale(openRunOverlay);
+    return;
+  }
+
+  openRunOverlay();
 }
 
 void paddleTimerUpdate(void)
@@ -260,15 +284,24 @@ void paddleImpactKick(void)
 
 int paddleWidth(void)
 {
+  int width;
+
   switch (paddle.type)
   {
   case PADDLE_TYPE_LONG:
-    return LONG_WIDTH;
+    width = LONG_WIDTH;
+    break;
   case PADDLE_TYPE_SHORT:
-    return SHORT_WIDTH;
+    width = SHORT_WIDTH;
+    break;
   default:
-    return DEFAULT_WIDTH;
+    width = DEFAULT_WIDTH;
+    break;
   }
+
+  // NARROW, in a run that has taken it. Even, so that half of it - which is
+  // what the bounds and the collisions measure from the centre - is whole.
+  return (int)(width * runPaddleWidthScale()) & ~1;
 }
 
 void initializePaddle(void)

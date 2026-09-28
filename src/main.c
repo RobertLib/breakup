@@ -1,6 +1,7 @@
 #include "globals.h"
 #include "lib/audio.h"
 #include "lib/camera.h"
+#include "lib/clip.h"
 #include "lib/game-state.h"
 #include "lib/gfx.h"
 #include "lib/postfx.h"
@@ -8,7 +9,11 @@
 #include "lib/starfield.h"
 #include "lib/transition.h"
 #include "paddle/paddle.h"
+#include "run/run.h"
+#include "story/story.h"
 #include "ui/floating-text.h"
+#include "ui/run-overlay.h"
+#include "ui/toast.h"
 #include "level-manager.h"
 #include "version.h"
 #include <time.h>
@@ -133,6 +138,7 @@ static bool mixReady;
 static int shotFrame = -1;
 static int shotFrames = 1;
 static int shotStep = 1;
+static int shotScale = 1;
 static char shotPath[512];
 
 static int keyFrames[32];
@@ -260,8 +266,12 @@ static void runFrame(void)
   // Update
   updateGameState();
   updateTransition();
+  updateToasts();
+  clipUpdate();
 
   // Draw
+  clipBeginFrame();
+
   SDL_SetRenderDrawColor(renderer, 0x00, 0x00, 0x00, 0xff);
 
   SDL_RenderClear(renderer);
@@ -269,6 +279,8 @@ static void runFrame(void)
   drawGameState();
   drawVignette();
   drawTransition();
+
+  drawToasts(getGameState() == GAME_STATE_PLAYING_SCREEN && runOverlayActive());
 
   if (scripted && frameCounter >= shotFrame && shotsTaken < shotFrames &&
       (frameCounter - shotFrame) % shotStep == 0)
@@ -328,20 +340,23 @@ static void runFrame(void)
 // stop, which is why it is a function rather than the tail of main().
 static void shutdownGame(void)
 {
-  // A run that ends by closing the window is still a run. recordScore() lived
-  // on the game over and win screens only, so the one exit from the game that
-  // does not pass through either of them - the close button, mid-level, which
-  // is how a session usually ends - threw the score away.
-  if (getGameState() == GAME_STATE_PLAYING_SCREEN)
+  // A run that ends by closing the window is still a run - the close button,
+  // mid-level, is how a session usually ends - and it is recorded the way
+  // abandoning it from the pause menu would be.
+  if (getGameState() == GAME_STATE_PLAYING_SCREEN && runActive())
   {
-    recordScore(paddle.score, paddle.level + 1);
+    runFinish(RUN_END_QUIT, paddle.score);
   }
+
+  clipShutdown();
 
   // Cleanup
   writeSave();
 
   destroyGameState();
+  destroyStory();
   destroyTransition();
+  destroyToasts();
   destroyLevelManager();
   destroyAudio();
   destroyFloatingTexts();
@@ -408,28 +423,40 @@ int main(UNUSED int argc, UNUSED char *argv[])
   // how the rest of this function behaves and everything it changes is set up
   // before the main loop:
   //
-  //   BREAKUP_STATE=intro|menu|levels|playing|gameover|win  jump to a state
-  //   BREAKUP_LEVEL=N   start playing at level N (1-based)
+  //   BREAKUP_STATE=intro|menu|playing|gameover|win|cover  jump to a state
+  //   BREAKUP_LEVEL=N   start a run on level N (1-based) instead of its draw
   //   BREAKUP_SCORE=N   start with N points
-  //   BREAKUP_UNLOCKED=N   pretend N levels have been unlocked
   //   BREAKUP_KEYS=frame:scancode,frame:scancode  inject key presses
   //   BREAKUP_AUTOPLAY=1   the paddle tracks the ball (see playing-screen.c)
   //   BREAKUP_SEED=N    seed the RNG, instead of the clock
+  //   BREAKUP_RUN=N     start a run with seed N (see src/run/run.h)
+  //   BREAKUP_RUN_STAGE=K  ...at its K-th stage, having gone deeper at each boss
+  //   BREAKUP_OVERLAY=1    ...with the perk draft or cash-out already open
+  //   BREAKUP_RUN_PERKS=M  ...holding the perks in bitmask M (see run/perks.h)
+  //   BREAKUP_CLIP_DIR=path/  write G's clips here rather than to Pictures
+  //   BREAKUP_STORY=prologue|interlude|finale|epilogue  open on that scene of
+  //                     the Sovereign's (epilogue wants BREAKUP_STATE=gameover)
   //   BREAKUP_SHOT=frame:path.bmp   save a screenshot at that frame and quit
   //   BREAKUP_SHOT_FRAMES=N   write N frames from there on, path-0000.bmp up
   //   BREAKUP_SHOT_STEP=K     keep every K-th frame of that burst
+  //   BREAKUP_SHOT_SCALE=K    ...drawn at K times the logical 800x600
   //
-  // STATE, LEVEL, SCORE, UNLOCKED, KEYS and SEED leave the save file read-only
-  // for the run (see setSaveReadOnly() in save.h); SHOT does not read it either.
+  // STATE, LEVEL, SCORE, KEYS, SEED and RUN leave the save file
+  // read-only for the run (see setSaveReadOnly() in save.h); SHOT does not read
+  // it either.
   const char *stateEnv = SDL_getenv("BREAKUP_STATE");
   const char *levelEnv = SDL_getenv("BREAKUP_LEVEL");
   const char *scoreEnv = SDL_getenv("BREAKUP_SCORE");
-  const char *unlockedEnv = SDL_getenv("BREAKUP_UNLOCKED");
   const char *keysEnv = SDL_getenv("BREAKUP_KEYS");
   const char *seedEnv = SDL_getenv("BREAKUP_SEED");
+  const char *runEnv = SDL_getenv("BREAKUP_RUN");
+  const char *runStageEnv = SDL_getenv("BREAKUP_RUN_STAGE");
+  const char *runPerksEnv = SDL_getenv("BREAKUP_RUN_PERKS");
+  const char *storyEnv = SDL_getenv("BREAKUP_STORY");
   const char *shotEnv = SDL_getenv("BREAKUP_SHOT");
   const char *shotFramesEnv = SDL_getenv("BREAKUP_SHOT_FRAMES");
   const char *shotStepEnv = SDL_getenv("BREAKUP_SHOT_STEP");
+  const char *shotScaleEnv = SDL_getenv("BREAKUP_SHOT_SCALE");
 
   // Seeded on request, so that two captures of one commit are two copies of the
   // same picture: the starfields, the particles, the power-up drops and the
@@ -477,17 +504,30 @@ int main(UNUSED int argc, UNUSED char *argv[])
     {
       shotStep = SDL_max(1, SDL_atoi(shotStepEnv));
     }
+
+    // A bigger window rather than a bigger picture of the same one: the scene
+    // texture, the sprites and the text all follow the window's own pixel size
+    // (see postfx.h, GFX_SS and TEXT_SCALE), so at 2 this is the game drawn at
+    // twice the detail and not an 800x600 frame upscaled. The cover is what
+    // asks for it - see tools/press_kit.sh.
+    if (shotScaleEnv != NULL)
+    {
+      shotScale = SDL_clamp(SDL_atoi(shotScaleEnv), 1, 4);
+    }
   }
 
   setSaveScripted(scripted);
+  clipSetEnabled(!scripted);
 
   // The other helpers still read the save, so a developer sees the game as
   // their own machine has it, but nothing they set up is written back: a run
-  // with BREAKUP_UNLOCKED=27 must not leave a save with twenty-seven levels
-  // unlocked in it on the way out. writeSave() itself is what honours this, so
-  // no path out of the game - not the F key, not the close button - can forget.
+  // begun with every perk in hand must not leave its score in the table, nor
+  // unlock anything, on the way out. writeSave() itself is what honours this,
+  // so no path out of the game - not the F key, not the close button - can
+  // forget.
   setSaveReadOnly(stateEnv != NULL || levelEnv != NULL || scoreEnv != NULL ||
-                  unlockedEnv != NULL || keysEnv != NULL || seedEnv != NULL);
+                  keysEnv != NULL || seedEnv != NULL || runEnv != NULL ||
+                  storyEnv != NULL);
 
   // Init SDL, SDL_ttf, SDL_mixer
   if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO))
@@ -548,8 +588,8 @@ int main(UNUSED int argc, UNUSED char *argv[])
   //                         and HiDPI displays this game asks for above.
   window = SDL_CreateWindow(
       BREAKUP_APP_NAME,
-      SCREEN_WIDTH,
-      SCREEN_HEIGHT,
+      SCREEN_WIDTH * shotScale,
+      SCREEN_HEIGHT * shotScale,
 #if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
       SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_FULLSCREEN);
 #elif defined(__EMSCRIPTEN__)
@@ -609,12 +649,6 @@ int main(UNUSED int argc, UNUSED char *argv[])
   font64 = loadFont("assets/font.ttf", 64);
 
   // Initialization.
-  //
-  // The levels load *before* the save, and the order is the point: loadSave()
-  // clamps `unlocked` to how many levels there actually are, and with it the
-  // other way round it had no count to clamp against and used a hard-coded 100
-  // instead. Nothing in the level manager reads saveData, so this costs
-  // nothing.
   initializeLevelManager();
   loadSave();
   initializeGfx();
@@ -636,55 +670,105 @@ int main(UNUSED int argc, UNUSED char *argv[])
   // the bottom of the first frame, and initializePaddle() sets the score to
   // zero on its way past - so BREAKUP_SCORE was silently ignored by every
   // capture of the one screen that shows a score being played for.
-  // setStartScore() both sets it now (for =gameover and =win, which never
-  // initialize a paddle) and survives the initializePaddle() that follows.
+  // setStartScore() survives the initializePaddle() that follows.
   if (scoreEnv != NULL)
   {
     setStartScore(SDL_atoi(scoreEnv));
   }
 
-  // Only the level select screen reads this, and it is the one screen a capture
-  // cannot photograph honestly without it: a scripted run starts from the
-  // shipped save, where exactly one level is unlocked, so the grid is twenty-six
-  // padlocks and no level names. It is not written to any save file: the
-  // setSaveReadOnly() call at the top of main() sees to that.
-  //
-  // Both of the clamps below go the wrong way round when there are no levels
-  // at all: clamp(n, 1, 0) is 0 and clamp(n, 0, -1) is -1, and -1 is what
-  // setStartLevel() would then hand to the bricks. A build whose assets did
-  // not embed is a broken build, but it should say so rather than index
-  // backwards off an array.
+  // The clamp below goes the wrong way round when there are no levels at all:
+  // clamp(n, 0, -1) is -1, and -1 is what setStartLevel() would then hand to
+  // the bricks. A build whose assets did not embed is a broken build, but it
+  // should say so rather than index backwards off an array.
   const bool haveLevels = getNumberOfLevels() > 0;
 
-  if (!haveLevels && (unlockedEnv != NULL || levelEnv != NULL))
+  // The epilogue is spoken over the run-over screen, which BREAKUP_STATE opens;
+  // every other scene is spoken over a run, which is started for it below.
+  bool storyRun = storyEnv != NULL && SDL_strcmp(storyEnv, "epilogue") != 0;
+
+  if (storyEnv != NULL)
   {
-    fprintf(stderr, "No levels loaded; BREAKUP_LEVEL and BREAKUP_UNLOCKED ignored\n");
+    storyDevRequest(storyEnv);
   }
 
-  if (haveLevels && unlockedEnv != NULL)
+  if (!haveLevels && (runEnv != NULL || levelEnv != NULL || storyRun))
   {
-    saveData.unlocked = clamp(SDL_atoi(unlockedEnv), 1, getNumberOfLevels());
+    fprintf(stderr, "No levels loaded; BREAKUP_RUN, BREAKUP_LEVEL and BREAKUP_STORY ignored\n");
   }
 
-  if (haveLevels && levelEnv != NULL)
+  if (haveLevels && (runEnv != NULL || levelEnv != NULL || storyRun))
   {
-    setStartLevel(clamp(SDL_atoi(levelEnv) - 1, 0, getNumberOfLevels() - 1));
+    // A seed is taken as given, and otherwise drawn from rand() - which
+    // BREAKUP_SEED pins, so a capture of a level is still reproducible.
+    int level = runEnv != NULL
+                    ? startRunWithSeed((Uint32)SDL_strtoul(runEnv, NULL, 10), false)
+                    : startRun(false);
+    int stages = runStageEnv != NULL ? SDL_atoi(runStageEnv) : 0;
+
+    // Walked the way a player would walk it, so the stage arrives with the
+    // curses and the multiplier that getting there costs.
+    for (int i = 0; i < stages; i++)
+    {
+      if (runStageIsBoss())
+      {
+        runGoDeeper(0);
+      }
+
+      level = runAdvance();
+    }
+
+    // For trying a combination without drafting it: every perk in the mask,
+    // locked or not.
+    if (runPerksEnv != NULL)
+    {
+      Uint32 mask = (Uint32)SDL_strtoul(runPerksEnv, NULL, 0);
+
+      for (int i = 0; i < PERK_COUNT; i++)
+      {
+        if (mask & PERK_BIT(i))
+        {
+          runTakePerk((Perk)i);
+        }
+      }
+    }
+
+    // BREAKUP_LEVEL puts a particular level file on the stage, which is how
+    // a capture photographs one: the run around it is an ordinary one.
+    if (levelEnv != NULL)
+    {
+      level = clamp(SDL_atoi(levelEnv) - 1, 0, getNumberOfLevels() - 1);
+      runForceLevel(level);
+    }
+
+    setStartLevel(level);
     nextGameState = GAME_STATE_PLAYING_SCREEN;
   }
   else if (stateEnv != NULL)
   {
+    // gameover and win are both the run-over screen now, shown a result that
+    // no run produced - BREAKUP_SCORE's, if there is one.
+    int score = scoreEnv != NULL ? SDL_atoi(scoreEnv) : 0;
+
     if (SDL_strcmp(stateEnv, "intro") == 0)
       nextGameState = GAME_STATE_INTRO_SCREEN;
     else if (SDL_strcmp(stateEnv, "menu") == 0)
       nextGameState = GAME_STATE_MENU_SCREEN;
-    else if (SDL_strcmp(stateEnv, "levels") == 0)
-      nextGameState = GAME_STATE_LEVEL_SELECT_SCREEN;
     else if (SDL_strcmp(stateEnv, "playing") == 0)
       nextGameState = GAME_STATE_PLAYING_SCREEN;
     else if (SDL_strcmp(stateEnv, "gameover") == 0)
-      nextGameState = GAME_STATE_GAME_OVER_SCREEN;
+    {
+      runPreviewResult(RUN_END_DIED, score);
+      nextGameState = GAME_STATE_RUN_OVER_SCREEN;
+    }
     else if (SDL_strcmp(stateEnv, "win") == 0)
-      nextGameState = GAME_STATE_WIN_SCREEN;
+    {
+      runPreviewResult(RUN_END_WON, score);
+      nextGameState = GAME_STATE_RUN_OVER_SCREEN;
+    }
+    else if (SDL_strcmp(stateEnv, "cover") == 0)
+      nextGameState = GAME_STATE_COVER_SCREEN;
+    else
+      fprintf(stderr, "BREAKUP_STATE=%s is not a screen; ignored\n", stateEnv);
   }
 
   if (keysEnv != NULL)

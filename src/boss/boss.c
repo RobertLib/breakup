@@ -11,6 +11,9 @@
 #include "../lib/gfx.h"
 #include "../lib/particles.h"
 #include "../paddle/paddle.h"
+#include "../run/perks.h"
+#include "../run/run.h"
+#include "../story/presence.h"
 #include "../types.h"
 #include "../ui/floating-text.h"
 
@@ -295,7 +298,7 @@ static void breakPlate(BossArmor *plate, Vec2 at)
 {
   plate->active = false;
 
-  addScore(150);
+  addScore(runScoreValue(150));
   playSfxAt(SFX_BRICK_BREAK, -3.0f);
   spawnBurst(at.x, at.y, def()->tint, 16, 250);
   spawnGlowPuff(at.x, at.y, def()->tint, 70, 0.35f);
@@ -304,7 +307,7 @@ static void breakPlate(BossArmor *plate, Vec2 at)
   // The arena is thin, so a plate is most of what can drop anything on a boss
   // level. The rate is well above a brick's: a fight this long with no
   // multiball and no expand in it is a war of attrition.
-  if (frand() < 0.4f)
+  if (frand() < 0.4f * runItemDropScale())
   {
     trySpawnBrickItem(at.x - GFX_ITEM_W / 2.0f, at.y);
   }
@@ -351,11 +354,12 @@ static void hitCore(Vec2 at)
   boss.coreFlash = 1.0f;
   boss.invuln = CORE_INVULN;
 
-  addScore(500);
+  addScore(runScoreValue(500));
 
   SDL_Color color = coreColor();
 
   playSfx(SFX_CRYSTAL);
+  presenceReact(PRESENCE_CORE_HIT);
   spawnBurst(at.x, at.y, color, 30, 320);
   spawnGlowPuff(boss.pos.x, boss.pos.y, color, 170, 0.5f);
   spawnFloatingText(boss.pos.x, boss.pos.y - 50, "HIT!", color);
@@ -371,7 +375,8 @@ static void hitCore(Vec2 at)
     boss.alive = false;
     boss.dyingT = 0;
 
-    addScore(3000);
+    addScore(runScoreValue(3000));
+    noteBossDefeated(boss.def + 1);
     spawnFloatingText(boss.pos.x, boss.pos.y - 80, "CORE DOWN",
                       (SDL_Color){255, 255, 255, 255});
 
@@ -617,7 +622,7 @@ static void updateDying(void)
       boss.armor[i].active = false;
     }
 
-    killEnemiesInRadius(SCREEN_WIDTH / 2.0f, boss.pos.y, 4000.0f);
+    killEnemiesInRadius(SCREEN_WIDTH / 2.0f, boss.pos.y, 4000.0f, false);
     clearEnemyBullets();
 
     // The crystal going up takes the arena with it. It is the right picture,
@@ -627,7 +632,7 @@ static void updateDying(void)
     // mopping up. Steel shrugs this off exactly as it shrugs off everything.
     for (int i = 0; i < numBricks; i++)
     {
-      damageBrick(&bricks[i], 99, false, (Vec2){0, 0});
+      damageBrick(&bricks[i], 99, HIT_BOSS, (Vec2){0, 0});
     }
 
     addFlash((SDL_Color){255, 255, 255, 255}, 1.0f);

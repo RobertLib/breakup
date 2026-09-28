@@ -20,9 +20,9 @@ const char *currentTest = "";
 int main(void)
 {
   // Before anything else, and before any test has a chance to call
-  // recordScore() or unlockLevel(). Both of those write the save file the
-  // moment they change something, and the path they write to is the real one
-  // for whoever is running this. See the header of tests/test_progress.c.
+  // recordScore() or runFinish(). Both of those write the save file the moment
+  // they change something, and the path they write to is the real one for
+  // whoever is running this. See the header of tests/test_progress.c.
   setSaveScripted(true);
 
   printf("breakup tests\n\n");
@@ -32,6 +32,9 @@ int main(void)
   testProgress();
   testSaveParser();
   testLevelParser();
+  testRun();
+  testGif();
+  testStory();
 
   printf("\n%d checks, %d failed\n", testsRun, testsFailed);
 

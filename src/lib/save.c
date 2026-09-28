@@ -1,6 +1,6 @@
 #include "save.h"
 #include "../version.h"
-#include "../level-manager.h"
+#include "../run/perks.h"
 #include <errno.h>
 #include <limits.h>
 #include <string.h>
@@ -60,9 +60,12 @@ static void resolveSavePath(void)
   SDL_free(pref);
 }
 
+// The most acts a score line may claim. A run that gets further than this has
+// been playing for a very long time; a save that says so has been edited.
+#define MAX_ACT 9999
+
 static void resetSaveData(void)
 {
-  saveData.unlocked = 1;
   saveData.musicVol = 0.7f;
   saveData.sfxVol = 0.8f;
   saveData.fullscreen = false;
@@ -70,9 +73,18 @@ static void resetSaveData(void)
   for (int i = 0; i < HIGH_SCORE_COUNT; i++)
   {
     saveData.highScores[i] = 0;
-    saveData.highLevels[i] = 0;
+    saveData.highActs[i] = 0;
   }
+
+  saveData.perksUnlocked = starterPerks();
+  saveData.dailyDate = 0;
+  saveData.dailyBest = 0;
+
+  saveData.story = true;
+  saveData.runsStarted = 0;
+  saveData.storySeen = 0;
 }
+
 
 // Trailing whitespace is allowed after a number and nothing else is, so a file
 // saved with CRLF line endings still reads and `music=0.5abc` does not.
@@ -138,6 +150,22 @@ static bool parseFloat(const char *s, float *out)
   return true;
 }
 
+// Splits "a,b" into two ints. `value` is edited in place, like the line it
+// came from.
+static bool parsePair(char *value, int *a, int *b)
+{
+  char *comma = strchr(value, ',');
+
+  if (comma == NULL)
+  {
+    return false;
+  }
+
+  *comma = '\0';
+
+  return parseInt(value, a) && parseInt(comma + 1, b);
+}
+
 // One `key=value` line. `line` is NUL-terminated and may be edited in place.
 static void parseSaveLine(char *line)
 {
@@ -151,30 +179,11 @@ static void parseSaveLine(char *line)
   *eq = '\0';
 
   const char *key = line;
-  const char *value = eq + 1;
-  int iv;
+  char *value = eq + 1;
+  int iv, iv2;
   float fv;
 
-  if (strcmp(key, "unlocked") == 0)
-  {
-    if (parseInt(value, &iv))
-    {
-      // Clamped to the levels this build actually has, which is what
-      // unlockLevel() below has always done - this end of it used a
-      // hard-coded 100 (the level manager's own MAX_LEVELS, by coincidence
-      // rather than by reference) because main() used to load the save before
-      // the levels and there was no count to ask for yet. It loads them first
-      // now.
-      //
-      // The guard is not decoration: clamp(n, 1, 0) is 0, and a build whose
-      // assets did not embed would otherwise turn a perfectly good save into
-      // zero unlocked levels and write it back out at exit.
-      int total = getNumberOfLevels();
-
-      saveData.unlocked = total > 0 ? clamp(iv, 1, total) : 1;
-    }
-  }
-  else if (strcmp(key, "music") == 0)
+  if (strcmp(key, "music") == 0)
   {
     if (parseFloat(value, &fv))
     {
@@ -195,35 +204,71 @@ static void parseSaveLine(char *line)
       saveData.fullscreen = iv != 0;
     }
   }
-  else if (key[0] == 'h' && key[1] == 's')
+  else if (strcmp(key, "perks") == 0)
   {
-    // hsN=score,level
+    // Whatever the file says, a perk the game starts with stays unlocked and
+    // a bit no perk owns stays clear - so a hand-edited "perks=-1" unlocks
+    // the collection rather than inventing perks that do not exist.
+    if (parseInt(value, &iv))
+    {
+      saveData.perksUnlocked = ((Uint32)iv & unlockablePerks()) | starterPerks();
+    }
+  }
+  else if (strcmp(key, "daily") == 0)
+  {
+    // daily=YYYYMMDD,score - a date that cannot be one is no daily at all
+    if (parsePair(value, &iv, &iv2) && iv >= 20000101 && iv <= 99991231)
+    {
+      saveData.dailyDate = iv;
+      saveData.dailyBest = iv2 > 0 ? iv2 : 0;
+    }
+  }
+  else if (strcmp(key, "story") == 0)
+  {
+    if (parseInt(value, &iv))
+    {
+      saveData.story = iv != 0;
+    }
+  }
+  else if (strcmp(key, "runs") == 0)
+  {
+    if (parseInt(value, &iv))
+    {
+      saveData.runsStarted = iv > 0 ? iv : 0;
+    }
+  }
+  else if (strcmp(key, "seen") == 0)
+  {
+    // Only the bits a scene owns, so a hand-edited "seen=-1" skips what can be
+    // skipped and invents nothing.
+    if (parseInt(value, &iv))
+    {
+      saveData.storySeen = (Uint32)iv & (STORY_SEEN_PROLOGUE | STORY_SEEN_FINALE);
+    }
+  }
+  else if (strncmp(key, "best", 4) == 0)
+  {
+    // bestN=score,act
+    //
+    // Not the `hsN=score,level` lines of the builds before run mode, which are
+    // skipped with every other key this one does not know: those were scores
+    // of a different game, measured in levels, and read as runs they would
+    // put "ACT 27" at the top of the table.
     int slot;
-    char *comma = strchr(eq + 1, ',');
 
-    if (comma == NULL || !parseInt(key + 2, &slot) || slot < 0 ||
-        slot >= HIGH_SCORE_COUNT)
+    if (!parseInt(key + 4, &slot) || slot < 0 || slot >= HIGH_SCORE_COUNT ||
+        !parsePair(value, &iv, &iv2))
     {
       return;
     }
 
-    *comma = '\0';
-
-    int score, level;
-
-    if (parseInt(value, &score) && parseInt(comma + 1, &level))
-    {
-      // Clamped for the same reason `unlocked` above is: this file is plain
-      // text in the player's own directory and nothing stops it being
-      // edited, truncated or written by an older build. recordScore() only
-      // ever stores a positive score and a level that exists, so anything
-      // else arriving here is not a score - and the one thing that must not
-      // happen is the high score table printing "-00005" at somebody.
-      int total = getNumberOfLevels();
-
-      saveData.highScores[slot] = score > 0 ? score : 0;
-      saveData.highLevels[slot] = total > 0 ? clamp(level, 0, total) : 0;
-    }
+    // Clamped because this file is plain text in the player's own directory
+    // and nothing stops it being edited, truncated or written by an older
+    // build. recordScore() only ever stores a positive score, so anything
+    // else arriving here is not a score - and the one thing that must not
+    // happen is the high score table printing "-00005" at somebody.
+    saveData.highScores[slot] = iv > 0 ? iv : 0;
+    saveData.highActs[slot] = clamp(iv2, 0, MAX_ACT);
   }
 }
 
@@ -326,8 +371,8 @@ void writeSave(void)
   // player with an empty save rather than the one they had.
   char buf[1024];
   int len = snprintf(buf, sizeof(buf),
-                     "unlocked=%d\nmusic=%.2f\nsfx=%.2f\nfullscreen=%d\n",
-                     saveData.unlocked, saveData.musicVol, saveData.sfxVol,
+                     "music=%.2f\nsfx=%.2f\nfullscreen=%d\n",
+                     saveData.musicVol, saveData.sfxVol,
                      saveData.fullscreen ? 1 : 0);
 
   for (int i = 0; i < HIGH_SCORE_COUNT && len >= 0 && (size_t)len < sizeof(buf); i++)
@@ -337,8 +382,8 @@ void writeSave(void)
     // handed to the next call is unsigned, where sizeof(buf) - len underflows
     // to something enormous. It cannot happen at these sizes; it is checked
     // because the alternative to checking is finding out.
-    int written = snprintf(buf + len, sizeof(buf) - (size_t)len, "hs%d=%d,%d\n",
-                           i, saveData.highScores[i], saveData.highLevels[i]);
+    int written = snprintf(buf + len, sizeof(buf) - (size_t)len, "best%d=%d,%d\n",
+                           i, saveData.highScores[i], saveData.highActs[i]);
 
     if (written < 0)
     {
@@ -347,6 +392,17 @@ void writeSave(void)
     }
 
     len += written;
+  }
+
+  if (len >= 0 && (size_t)len < sizeof(buf))
+  {
+    int written = snprintf(buf + len, sizeof(buf) - (size_t)len,
+                           "perks=%u\ndaily=%d,%d\nstory=%d\nruns=%d\nseen=%u\n",
+                           (unsigned)saveData.perksUnlocked, saveData.dailyDate,
+                           saveData.dailyBest, saveData.story ? 1 : 0,
+                           saveData.runsStarted, (unsigned)saveData.storySeen);
+
+    len = written < 0 ? -1 : len + written;
   }
 
   if (len < 0 || (size_t)len >= sizeof(buf))
@@ -370,24 +426,7 @@ void writeSave(void)
   SDL_CloseIO(file);
 }
 
-void unlockLevel(int completedLevel)
-{
-  int newUnlocked = completedLevel + 2; // next level becomes playable
-  int total = getNumberOfLevels();
-
-  if (newUnlocked > total)
-  {
-    newUnlocked = total;
-  }
-
-  if (newUnlocked > saveData.unlocked)
-  {
-    saveData.unlocked = newUnlocked;
-    writeSave();
-  }
-}
-
-int recordScore(int score, int levelReached)
+int recordScore(int score, int actReached)
 {
   if (score <= 0)
   {
@@ -402,11 +441,11 @@ int recordScore(int score, int levelReached)
       for (int j = HIGH_SCORE_COUNT - 1; j > i; j--)
       {
         saveData.highScores[j] = saveData.highScores[j - 1];
-        saveData.highLevels[j] = saveData.highLevels[j - 1];
+        saveData.highActs[j] = saveData.highActs[j - 1];
       }
 
       saveData.highScores[i] = score;
-      saveData.highLevels[i] = levelReached;
+      saveData.highActs[i] = clamp(actReached, 0, MAX_ACT);
       writeSave();
       return i;
     }

@@ -28,8 +28,18 @@ typedef enum Sfx
   SFX_CATCH,
   SFX_GAME_OVER, // jingle
   SFX_WIN,       // jingle
+  SFX_STORY_APPEAR,  // the Sovereign arriving: a swell out of nothing
+  SFX_STORY_PAGE,    // a page of its writing dissolving
+  SFX_STORY_SHATTER, // its face coming apart, at the end of the game
   SFX_COUNT
 } Sfx;
+
+// The Sovereign's voice is five sung vowels - A, E, I, O, U - and what it says
+// is those, one per syllable of whatever it is writing, at a pitch picked from
+// the word. It is not speech and is not meant to be: it is the rhythm and the
+// melody of speech with nothing in it to understand, which is what lets a line
+// of text on the screen sound like somebody saying it.
+#define VOICE_VOWELS 5
 
 // Four per world against LEVELS_PER_WORLD of five, so a world plays a, b, c, d
 // and only comes back to a on its last level. Two was a track every other
@@ -80,3 +90,16 @@ void stopMusic(void);
 
 void setMusicVolume(float v); // 0..1
 void setSfxVolume(float v);   // 0..1
+
+// One syllable of the Sovereign's voice: `vowel` is 0..VOICE_VOWELS-1, pitched
+// like playSfxAt(), at `gain` of the sound effects' volume. It has tracks of
+// its own, so a sentence does not take the pool away from the game's sounds.
+void playVoice(int vowel, float semitones, float gain);
+
+// Holds the music down to `duck` of its volume (1 is untouched) while the
+// Sovereign speaks over it.
+void setMusicDuck(float duck);
+
+// The low hum under a story scene, at `gain` of the music's volume. Starts it
+// looping when it rises off nothing and stops it when it gets back there.
+void setDroneGain(float gain);

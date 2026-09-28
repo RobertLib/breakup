@@ -9,7 +9,7 @@
 // looking at. The scripts read these lines with sed, so keep them one per line
 // and keep the value in double quotes.
 
-#define BREAKUP_VERSION "1.0.0"
+#define BREAKUP_VERSION "1.0.2"
 
 // What the player sees: the window title, the .app, the archive names.
 #define BREAKUP_APP_NAME "Breakup"

@@ -94,3 +94,6 @@ void testLevels(void);
 void testProgress(void);
 void testSaveParser(void);
 void testLevelParser(void);
+void testRun(void);
+void testGif(void);
+void testStory(void);

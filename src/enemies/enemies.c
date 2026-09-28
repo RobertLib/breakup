@@ -1,4 +1,6 @@
 #include "enemies.h"
+#include "../balls/balls.h"
+#include "../bricks/brick-item.h"
 #include "../level-types.h"
 #include "../level-manager.h"
 #include "../lib/audio.h"
@@ -7,10 +9,15 @@
 #include "../lib/particles.h"
 #include "../paddle/paddle.h"
 #include "../bricks/brick.h"
+#include "../run/perks.h"
+#include "../run/run.h"
 #include "../ui/floating-text.h"
 
 #define MAX_SPAWNERS 16
 #define RESPAWN_DELAY 13.0f
+
+// What a kill adds to the combo under HUNTER.
+#define HUNTER_LINKS 3
 #define ENEMY_BULLET_SPEED 230.0f
 #define ENEMY_BULLET_SIZE 10
 
@@ -84,7 +91,7 @@ static void startRespawn(int spawnerIndex)
   if (spawnerIndex >= 0 && spawnerIndex < numSpawners)
   {
     spawners[spawnerIndex].waiting = true;
-    spawners[spawnerIndex].timer = RESPAWN_DELAY;
+    spawners[spawnerIndex].timer = RESPAWN_DELAY * runEnemyRespawnScale();
   }
 }
 
@@ -126,11 +133,20 @@ void killEnemy(Enemy *enemy, int score)
 
   if (score > 0)
   {
-    addScore(score);
+    int points = runScoreValue(score);
+
+    addScore(points);
 
     char text[16];
-    snprintf(text, sizeof(text), "%d", score);
+    snprintf(text, sizeof(text), "%d", points);
     spawnFloatingText(cx, cy, text, color);
+
+    noteEnemyKilled();
+
+    if (runHasPerk(PERK_HUNTER))
+    {
+      addComboLinks(HUNTER_LINKS, cx, cy);
+    }
   }
 
   // Splitters break into two minis
@@ -158,7 +174,7 @@ void killEnemy(Enemy *enemy, int score)
   startRespawn(spawnerIndex);
 }
 
-void killEnemiesInRadius(float x, float y, float radius)
+void killEnemiesInRadius(float x, float y, float radius, bool byBlast)
 {
   for (int i = 0; i < MAX_ENEMIES; i++)
   {
@@ -181,6 +197,14 @@ void killEnemiesInRadius(float x, float y, float radius)
     if (dx * dx + dy * dy <= radius * radius)
     {
       killEnemy(enemy, 300);
+
+      // An enemy caught in a blast leaves a capsule behind: the explosion is
+      // the one weapon that can take out a whole cluster, and this is what
+      // makes aiming one at them worth more than the points.
+      if (byBlast)
+      {
+        trySpawnBrickItem(cx - GFX_ITEM_W / 2.0f, cy);
+      }
     }
   }
 }
@@ -260,7 +284,7 @@ void initializeEnemies(void)
 
   clearEnemyBullets();
 
-  const Level *currentLevel = getLevel(paddle.level);
+  const Level *currentLevel = levelAsPlayed(paddle.level);
 
   int x = 0;
   int y = 0;

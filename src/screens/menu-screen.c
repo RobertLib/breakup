@@ -7,33 +7,58 @@
 #include "../lib/starfield.h"
 #include "../lib/transition.h"
 #include "../paddle/paddle.h"
+#include "../run/perks.h"
+#include "../run/run.h"
+#include "../lib/tunnel.h"
+#include "../lib/vector.h"
+#include "../story/being.h"
+#include "../story/pen.h"
+#include "../story/story.h"
 #include "../types.h"
 
 typedef enum MenuPage
 {
   PAGE_MAIN,
   PAGE_OPTIONS,
-  PAGE_SCORES
+  PAGE_SCORES,
+  PAGE_PERKS
 } MenuPage;
 
 // The rows this page can hold, and the rows this build shows. They are the same
 // number everywhere but the browser, where there is no quitting to offer and
-// QUIT is the last of the five - so it is simply never rendered, never walked
+// QUIT is the last of the six - so it is simply never rendered, never walked
 // to and never clickable, and nothing else on the page changes. See
 // BREAKUP_OFFERS_QUIT in globals.h.
 //
 // The arrays stay MAIN_ITEM_MAX long: the string is still in the binary, which
-// costs five bytes and keeps the table and the `case 4:` below reading as one
-// list rather than as a list with a hole in it.
-#define MAIN_ITEM_MAX 5
+// costs five bytes and keeps the table and the `case ITEM_QUIT:` below reading
+// as one list rather than as a list with a hole in it.
+#define MAIN_ITEM_MAX 6
 #define MAIN_ITEM_COUNT (BREAKUP_OFFERS_QUIT ? MAIN_ITEM_MAX : MAIN_ITEM_MAX - 1)
-#define OPTION_ITEM_COUNT 4
+#define OPTION_ITEM_COUNT 5
+
+// The rows of the main page by name, because three other pages hand the
+// cursor back to the row that opened them.
+enum
+{
+  ITEM_START,
+  ITEM_DAILY,
+  ITEM_PERKS,
+  ITEM_SCORES,
+  ITEM_OPTIONS,
+  ITEM_QUIT
+};
 
 static const char *mainItems[MAIN_ITEM_MAX] = {
-    "START GAME", "LEVEL SELECT", "HIGH SCORES", "OPTIONS", "QUIT"};
+    "START GAME", "DAILY RUN", "PERKS", "HIGH SCORES", "OPTIONS", "QUIT"};
+
+// The perk collection is two columns of names, read top to bottom.
+#define PERK_ROWS 7
+#define PERK_TOP 244.0f
+#define PERK_STEP 30.0f
 
 static const char *optionItems[OPTION_ITEM_COUNT] = {
-    "MUSIC", "SOUND FX", "FULLSCREEN", "BACK"};
+    "MUSIC", "SOUND FX", "FULLSCREEN", "STORY", "BACK"};
 
 static SDL_Texture *logoText;
 static SDL_Texture *mainTextures[MAIN_ITEM_MAX];
@@ -45,21 +70,114 @@ static SDL_Texture *onText;
 static SDL_Texture *offText;
 static SDL_Texture *hintText;
 
+static SDL_Texture *dailyText; // today's daily, under the table of best runs
+static SDL_Texture *perksTitle;
+static SDL_Texture *perkNames[PERK_COUNT];
+static SDL_Texture *perkDetail;
+static int perkDetailFor = -1;
+
+// The perks the collection lists, in enum order: every one but the instant.
+static Perk collection[PERK_COUNT];
+static int collectionSize;
+
 static MenuPage page;
 static int selection;
+
+// The Sovereign, looming over the menu: big, dim, and watching whatever the
+// cursor is on, with its eyes in the gap between the logo and the list. What
+// it thinks of the choice shows on its face.
+static Being face;
+static Tunnel tunnel;
+
+#define FACE_Y 222.0f
+#define FACE_SCALE 150.0f
 
 static const float MENU_TOP = 250;
 static const float MENU_STEP = 50;
 
 static void gotoPlaying(void)
 {
-  setStartLevel(0);
+  setStartLevel(startRun(false));
+  storyRequestPrologue();
   nextGameState = GAME_STATE_PLAYING_SCREEN;
 }
 
-static void gotoLevelSelect(void)
+static void gotoDailyRun(void)
 {
-  nextGameState = GAME_STATE_LEVEL_SELECT_SCREEN;
+  setStartLevel(startRun(true));
+  storyRequestPrologue();
+  nextGameState = GAME_STATE_PLAYING_SCREEN;
+}
+
+// The collection's names are drawn from the save as it is when the page is
+// opened, so they are rebuilt then rather than once for the whole menu: a perk
+// unlocked since the menu last came up has to show as unlocked.
+static void rebuildPerkPage(void)
+{
+  if (perksTitle != NULL)
+  {
+    SDL_DestroyTexture(perksTitle);
+  }
+
+  char buf[48];
+  snprintf(buf, sizeof(buf), "PERKS  %d/%d", unlockedPerkCount(), perkCollectionSize());
+  perksTitle = renderTextBlended(font32, buf, (SDL_Color){255, 255, 255, 255});
+
+  for (int i = 0; i < collectionSize; i++)
+  {
+    if (perkNames[i] != NULL)
+    {
+      SDL_DestroyTexture(perkNames[i]);
+    }
+
+    const PerkInfo *info = perkInfo(collection[i]);
+    bool unlocked = perkUnlocked(collection[i]);
+
+    perkNames[i] = renderTextBlended(
+        font16, info->name, unlocked ? info->color : (SDL_Color){90, 96, 125, 255});
+  }
+
+  perkDetailFor = -1;
+}
+
+// The box under the grid: what the highlighted perk does, or what unlocks it.
+static void rebuildPerkDetail(void)
+{
+  if (perkDetail != NULL)
+  {
+    SDL_DestroyTexture(perkDetail);
+    perkDetail = NULL;
+  }
+
+  perkDetailFor = selection;
+
+  if (selection < 0 || selection >= collectionSize)
+  {
+    return;
+  }
+
+  const PerkInfo *info = perkInfo(collection[selection]);
+  char buf[160];
+
+  if (perkUnlocked(collection[selection]))
+  {
+    snprintf(buf, sizeof(buf), "%s\n%s", info->name, info->description);
+    perkDetail = renderTextWrapped(font16, buf, (SDL_Color){210, 216, 240, 255}, 620, false);
+  }
+  else
+  {
+    snprintf(buf, sizeof(buf), "%s - LOCKED\nTO UNLOCK: %s", info->name,
+             info->unlockHint != NULL ? info->unlockHint : "?");
+    perkDetail = renderTextWrapped(font16, buf, (SDL_Color){255, 170, 90, 255}, 620, false);
+  }
+}
+
+static SDL_FRect perkCellRect(int index)
+{
+  int col = index / PERK_ROWS;
+  int row = index % PERK_ROWS;
+
+  return (SDL_FRect){col == 0 ? 90.0f : 450.0f, PERK_TOP + row * PERK_STEP, 300, 24};
 }
 
 static void rebuildScoreRows(void)
@@ -75,8 +193,8 @@ static void rebuildScoreRows(void)
 
     if (saveData.highScores[i] > 0)
     {
-      snprintf(buf, sizeof(buf), "%d.   %06d   LEVEL %d",
-               i + 1, saveData.highScores[i], saveData.highLevels[i]);
+      snprintf(buf, sizeof(buf), "%d.   %06d   ACT %d",
+               i + 1, saveData.highScores[i], saveData.highActs[i]);
     }
     else
     {
@@ -89,6 +207,24 @@ static void rebuildScoreRows(void)
             ? (SDL_Color){255, 220, 90, 255}
             : (SDL_Color){190, 200, 230, 255});
   }
+
+  if (dailyText != NULL)
+  {
+    SDL_DestroyTexture(dailyText);
+  }
+
+  char buf[64];
+
+  if (saveData.dailyDate != 0 && saveData.dailyDate == todayStamp())
+  {
+    snprintf(buf, sizeof(buf), "TODAY'S DAILY  BEST %06d", saveData.dailyBest);
+  }
+  else
+  {
+    snprintf(buf, sizeof(buf), "TODAY'S DAILY  NOT PLAYED YET");
+  }
+
+  dailyText = renderTextBlended(font16, buf, (SDL_Color){140, 235, 255, 255});
 }
 
 void initializeMenuScreen(void)
@@ -119,6 +255,27 @@ void initializeMenuScreen(void)
 
   rebuildScoreRows();
 
+  collectionSize = 0;
+
+  for (int i = 0; i < PERK_COUNT; i++)
+  {
+    if (!perkInfo((Perk)i)->instant)
+    {
+      collection[collectionSize++] = (Perk)i;
+    }
+  }
+
+  beingReset(&face);
+  beingPlace(&face, SCREEN_WIDTH / 2.0f, FACE_Y);
+  face.scale = FACE_SCALE;
+  face.eyeGlow = 3.0f;
+  face.wander = 1.4f;
+
+  // Somebody who has broken it once meets it put back together, and it shows.
+  beingSetGlitch(&face, saveData.storySeen & STORY_SEEN_FINALE ? 0.15f : 0.0f);
+
+  tunnelReset(&tunnel);
+
   playMusic(MUSIC_MENU);
 }
 
@@ -128,23 +285,43 @@ static void activateMainItem(int item)
 
   switch (item)
   {
-  case 0:
+  case ITEM_START:
     startTransition(gotoPlaying);
     break;
-  case 1:
-    startTransition(gotoLevelSelect);
+  case ITEM_DAILY:
+    startTransition(gotoDailyRun);
     break;
-  case 2:
+  case ITEM_PERKS:
+    rebuildPerkPage();
+    page = PAGE_PERKS;
+    selection = 0;
+    break;
+  case ITEM_SCORES:
+    // Rebuilt on the way in, because the date the daily line is measured
+    // against moves at midnight whether or not the menu does.
+    rebuildScoreRows();
     page = PAGE_SCORES;
     break;
-  case 3:
+  case ITEM_OPTIONS:
     page = PAGE_OPTIONS;
     selection = 0;
     break;
-  case 4:
+  case ITEM_QUIT:
     quitRequested = true;
     break;
   }
+}
+
+static void backToMain(int row)
+{
+  playSfx(SFX_MENU_SELECT);
+  page = PAGE_MAIN;
+  selection = row;
+}
+
+static void leavePerkPage(void)
+{
+  backToMain(ITEM_PERKS);
 }
 
 static void adjustOption(int item, int direction)
@@ -193,6 +370,13 @@ static void adjustOption(int item, int direction)
     writeSave();
     playSfx(SFX_MENU_MOVE);
     break;
+  // The Sovereign's scenes - the prologue, the interludes, the ending. A
+  // toggle like FULLSCREEN, so like it this takes no auto-repeat.
+  case 3:
+    saveData.story = !saveData.story;
+    writeSave();
+    playSfx(SFX_MENU_MOVE);
+    break;
   }
 }
 
@@ -204,6 +388,8 @@ static int itemCountForPage(void)
     return MAIN_ITEM_COUNT;
   case PAGE_OPTIONS:
     return OPTION_ITEM_COUNT;
+  case PAGE_PERKS:
+    return collectionSize > 0 ? collectionSize : 1;
   default:
     return 1;
   }
@@ -215,9 +401,30 @@ static void handleMouse(void)
   {
     if (isMousePressed[1])
     {
-      playSfx(SFX_MENU_SELECT);
-      page = PAGE_MAIN;
-      selection = 2;
+      backToMain(ITEM_SCORES);
+    }
+    return;
+  }
+
+  // Pointing at a name reads it; a click anywhere goes back, as on the scores.
+  if (page == PAGE_PERKS)
+  {
+    for (int i = 0; i < collectionSize; i++)
+    {
+      SDL_FRect cell = perkCellRect(i);
+
+      if (mouseMoved && selection != i &&
+          motionX >= cell.x - 20 && motionX <= cell.x + cell.w &&
+          motionY >= cell.y - 3 && motionY <= cell.y + cell.h + 3)
+      {
+        selection = i;
+        playSfx(SFX_MENU_MOVE);
+      }
+    }
+
+    if (isMousePressed[1])
+    {
+      leavePerkPage();
     }
     return;
   }
@@ -254,9 +461,7 @@ static void handleMouse(void)
         }
         else if (i == OPTION_ITEM_COUNT - 1)
         {
-          playSfx(SFX_MENU_SELECT);
-          page = PAGE_MAIN;
-          selection = 3;
+          backToMain(ITEM_OPTIONS);
         }
         else
         {
@@ -269,8 +474,45 @@ static void handleMouse(void)
   }
 }
 
+// Where the cursor is, for the face to look at, and what it makes of it: the
+// thought of a run amuses it, the table of the best of them does not, and
+// being left is the one thing on the menu that it minds.
+static void watchSelection(void)
+{
+  float step = (float)realDt;
+  float y = MENU_TOP + selection * MENU_STEP + 16.0f;
+  StoryMood mood = STORY_MOOD_CALM;
+
+  if (page == PAGE_MAIN)
+  {
+    static const StoryMood moods[MAIN_ITEM_MAX] = {
+        [ITEM_START] = STORY_MOOD_AMUSED, [ITEM_DAILY] = STORY_MOOD_AMUSED,
+        [ITEM_PERKS] = STORY_MOOD_CALM, [ITEM_SCORES] = STORY_MOOD_STERN,
+        [ITEM_OPTIONS] = STORY_MOOD_CALM, [ITEM_QUIT] = STORY_MOOD_SOFT};
+
+    mood = moods[clamp(selection, 0, MAIN_ITEM_MAX - 1)];
+  }
+  else if (page == PAGE_SCORES)
+  {
+    mood = STORY_MOOD_STERN;
+    y = 380.0f;
+  }
+  else if (page == PAGE_PERKS && collectionSize > 0)
+  {
+    SDL_FRect cell = perkCellRect(selection);
+    y = cell.y + 8.0f;
+  }
+
+  beingSetMood(&face, mood);
+  beingLookAt(&face, SCREEN_WIDTH / 2.0f - 140.0f, y);
+  updateBeing(&face, step);
+  updateTunnel(&tunnel, step);
+}
+
 void updateMenuScreen(void)
 {
+  watchSelection();
+
   if (isTransitionActive())
   {
     return;
@@ -324,9 +566,7 @@ void updateMenuScreen(void)
     {
       if (selection == OPTION_ITEM_COUNT - 1)
       {
-        playSfx(SFX_MENU_SELECT);
-        page = PAGE_MAIN;
-        selection = 3;
+        backToMain(ITEM_OPTIONS);
       }
       else
       {
@@ -336,18 +576,29 @@ void updateMenuScreen(void)
 
     if (isKeyPressed[K_ESCAPE])
     {
-      playSfx(SFX_MENU_SELECT);
-      page = PAGE_MAIN;
-      selection = 3;
+      backToMain(ITEM_OPTIONS);
+    }
+  }
+  else if (page == PAGE_PERKS)
+  {
+    // Up and down walk the list; left and right jump a column.
+    if (collectionSize > 0 && (isKeyRepeated[K_LEFT] || isKeyRepeated[K_RIGHT]))
+    {
+      selection = wrapIndex(selection + (isKeyRepeated[K_RIGHT] ? PERK_ROWS : -PERK_ROWS),
+                            collectionSize);
+      playSfx(SFX_MENU_MOVE);
+    }
+
+    if (isKeyPressed[K_ESCAPE] || isKeyPressed[K_RETURN] || isKeyPressed[K_SPACE])
+    {
+      leavePerkPage();
     }
   }
   else // PAGE_SCORES
   {
     if (isKeyPressed[K_ESCAPE] || isKeyPressed[K_RETURN] || isKeyPressed[K_SPACE])
     {
-      playSfx(SFX_MENU_SELECT);
-      page = PAGE_MAIN;
-      selection = 2;
+      backToMain(ITEM_SCORES);
     }
   }
 
@@ -398,22 +649,17 @@ static void drawItem(SDL_Texture *tex, int index, bool selected)
     float w = size.x * pulse;
     float h = size.y * pulse;
 
-    // Selection chevrons
-    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-    SDL_Color glow = worldThemes[WORLD_COUNT].glow;
-    SDL_SetRenderDrawColor(renderer, glow.r, glow.g, glow.b, 255);
+    // The Sovereign's stylus either side of the choice, pointing at it the
+    // way it points at a letter it is writing.
+    SDL_Color glow = mixColor(worldThemes[WORLD_COUNT].glow, (SDL_Color){255, 255, 255, 255}, 0.3f);
 
     float cx = SCREEN_WIDTH / 2.0f;
     float cy = y + size.y / 2.0f;
-    float offset = w / 2 + 26 + sinf(gameTime * 6.0f) * 3.0f;
+    float offset = w / 2 + 28 + sinf(gameTime * 6.0f) * 3.0f;
 
-    for (int i = 0; i < 3; i++)
-    {
-      SDL_RenderLine(renderer, cx - offset - i, cy - 7 + i, cx - offset + 7 - i, cy);
-      SDL_RenderLine(renderer, cx - offset - i, cy + 7 - i, cx - offset + 7 - i, cy);
-      SDL_RenderLine(renderer, cx + offset + i, cy - 7 + i, cx + offset - 7 + i, cy);
-      SDL_RenderLine(renderer, cx + offset + i, cy + 7 - i, cx + offset - 7 + i, cy);
-    }
+    drawStylus(cx - offset, cy, 8.0f, gameTime, glow, 1.0f);
+    drawStylus(cx + offset, cy, 8.0f, -gameTime, glow, 1.0f);
+    vecFlush();
 
     SDL_FRect dst = {cx - w / 2, cy - h / 2, w, h};
     SDL_RenderTexture(renderer, tex, NULL, &dst);
@@ -459,6 +705,19 @@ void drawMenuScreen(void)
   bool scene = beginScene();
 
   drawBackground(WORLD_COUNT, BACKGROUND_MENU, gameTime * 24.0f);
+
+  // Sunk towards the dark of the Sovereign's scenes, with its tunnel and its
+  // face over that, before anything that has to be read.
+  SDL_Color glow = worldThemes[WORLD_COUNT].glow;
+
+  SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+  SDL_SetRenderDrawColor(renderer, 6, 6, 18, 110);
+  SDL_FRect full = {0, 0, SCREEN_WIDTH, SCREEN_HEIGHT};
+  SDL_RenderFillRect(renderer, &full);
+
+  drawTunnel(&tunnel, glow, 0.55f, SCREEN_WIDTH / 2.0f, 290.0f);
+  drawBeing(&face, glow, 0.24f);
+
   drawLogo();
 
   if (page == PAGE_MAIN)
@@ -466,6 +725,68 @@ void drawMenuScreen(void)
     for (int i = 0; i < MAIN_ITEM_COUNT; i++)
     {
       drawItem(mainTextures[i], i, selection == i);
+    }
+  }
+  else if (page == PAGE_PERKS)
+  {
+    if (perkDetailFor != selection)
+    {
+      rebuildPerkDetail();
+    }
+
+    SDL_FPoint titleSize = getSize(perksTitle);
+    SDL_FRect titleDst = {SCREEN_WIDTH / 2 - titleSize.x / 2, 192, titleSize.x, titleSize.y};
+    SDL_RenderTexture(renderer, perksTitle, NULL, &titleDst);
+
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+
+    for (int i = 0; i < collectionSize; i++)
+    {
+      SDL_FRect cell = perkCellRect(i);
+      const PerkInfo *info = perkInfo(collection[i]);
+      bool unlocked = perkUnlocked(collection[i]);
+      SDL_Color swatch = unlocked ? info->color : (SDL_Color){60, 64, 90, 255};
+
+      // A swatch of the perk's colour, hollow while it is still locked
+      SDL_SetRenderDrawColor(renderer, swatch.r, swatch.g, swatch.b, 255);
+      SDL_FRect mark = {cell.x, cell.y + 4, 8, 8};
+
+      if (unlocked)
+      {
+        SDL_RenderFillRect(renderer, &mark);
+      }
+      else
+      {
+        SDL_RenderRect(renderer, &mark);
+      }
+
+      SDL_FPoint size = getSize(perkNames[i]);
+      SDL_FRect dst = {cell.x + 18, cell.y, size.x, size.y};
+
+      if (i == selection)
+      {
+        SDL_Color glow = worldThemes[WORLD_COUNT].glow;
+        float cx = cell.x - 12 + sinf(gameTime * 6.0f) * 2.0f;
+        float cy = cell.y + 8;
+
+        drawStylus(cx - 2, cy, 5.0f, gameTime, glow, 1.0f);
+        vecFlush();
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+      }
+
+      SDL_RenderTexture(renderer, perkNames[i], NULL, &dst);
+    }
+
+    if (perkDetail != NULL)
+    {
+      SDL_FPoint size = getSize(perkDetail);
+
+      SDL_SetRenderDrawColor(renderer, 8, 10, 26, 200);
+      SDL_FRect box = {SCREEN_WIDTH / 2.0f - 330, 458, 660, 80};
+      SDL_RenderFillRect(renderer, &box);
+
+      SDL_FRect dst = {SCREEN_WIDTH / 2.0f - 310, 470, size.x, size.y};
+      SDL_RenderTexture(renderer, perkDetail, NULL, &dst);
     }
   }
   else if (page == PAGE_OPTIONS)
@@ -483,6 +804,11 @@ void drawMenuScreen(void)
       {
         SDL_FRect dst = {SCREEN_WIDTH / 2.0f - 250, y, size.x, size.y};
         SDL_RenderTexture(renderer, tex, NULL, &dst);
+
+        SDL_Color glow = mixColor(worldThemes[WORLD_COUNT].glow, (SDL_Color){255, 255, 255, 255}, 0.3f);
+        drawStylus(SCREEN_WIDTH / 2.0f - 278 + sinf(gameTime * 6.0f) * 3.0f, y + size.y / 2,
+                   8.0f, gameTime, glow, 1.0f);
+        vecFlush();
       }
       else
       {
@@ -500,6 +826,11 @@ void drawMenuScreen(void)
     SDL_FPoint fsSize = getSize(fsText);
     SDL_FRect fsDst = {SCREEN_WIDTH / 2.0f + 110, MENU_TOP + 2 * MENU_STEP + 6, fsSize.x, fsSize.y};
     SDL_RenderTexture(renderer, fsText, NULL, &fsDst);
+
+    SDL_Texture *storyText = saveData.story ? onText : offText;
+    SDL_FPoint storySize = getSize(storyText);
+    SDL_FRect storyDst = {SCREEN_WIDTH / 2.0f + 110, MENU_TOP + 3 * MENU_STEP + 6, storySize.x, storySize.y};
+    SDL_RenderTexture(renderer, storyText, NULL, &storyDst);
   }
   else // PAGE_SCORES
   {
@@ -513,6 +844,10 @@ void drawMenuScreen(void)
       SDL_FRect dst = {SCREEN_WIDTH / 2 - size.x / 2, 310.0f + i * 38, size.x, size.y};
       SDL_RenderTexture(renderer, scoreRows[i], NULL, &dst);
     }
+
+    SDL_FPoint dailySize = getSize(dailyText);
+    SDL_FRect dailyDst = {SCREEN_WIDTH / 2 - dailySize.x / 2, 498, dailySize.x, dailySize.y};
+    SDL_RenderTexture(renderer, dailyText, NULL, &dailyDst);
 
     SDL_FPoint backSize = getSize(scoresBack);
     SDL_FRect backDst = {SCREEN_WIDTH / 2 - backSize.x / 2, 530, backSize.x, backSize.y};
@@ -555,6 +890,21 @@ void destroyMenuScreen(void)
       scoreRows[i] = NULL;
     }
   }
+
+  SDL_DestroyTexture(dailyText);
+  dailyText = NULL;
+
+  for (int i = 0; i < PERK_COUNT; i++)
+  {
+    SDL_DestroyTexture(perkNames[i]);
+    perkNames[i] = NULL;
+  }
+
+  SDL_DestroyTexture(perksTitle);
+  SDL_DestroyTexture(perkDetail);
+  perksTitle = NULL;
+  perkDetail = NULL;
+  perkDetailFor = -1;
 
   SDL_DestroyTexture(scoresTitle);
   SDL_DestroyTexture(scoresBack);

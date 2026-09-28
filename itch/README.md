@@ -25,15 +25,15 @@ source view. If you change one, change the other.
 | --------------------------- | ----------------------------------------------------------------------------------------------------------------- |
 | Title                       | `Breakup`                                                                                                         |
 | Project URL                 | `breakup`                                                                                                         |
-| Short description / tagline | `Climb twenty neon towers, break the crystals hidden in them, and get past the seven bosses in the way. A brick-breaker that scrolls.` |
+| Short description / tagline | `A neon brick-breaker played as a roguelite: four acts of towers in a new order every run, a perk after every level, and after every boss the choice to cash out or go deeper.` |
 | Classification              | Games                                                                                                             |
 | Kind of project             | **HTML** — the web build is played on the page and the three downloads sit under it                               |
 | Release status              | Released                                                                                                          |
 | Pricing                     | **Donate** — the download stays free and a support button appears                                                 |
 | Genre                       | Action                                                                                                            |
-| Tags                        | `arcade`, `breakup`, `arkanoid`, `2d`, `retro`, `singleplayer`, `chiptune`, `difficult`                           |
+| Tags                        | `arcade`, `roguelite`, `breakup`, `arkanoid`, `2d`, `retro`, `singleplayer`, `chiptune`, `difficult`              |
 | Made with                   | SDL                                                                                                               |
-| Average session             | About an hour                                                                                                     |
+| Average session             | About a half-hour — a full run is sixteen levels, and a daily is one run                                          |
 | Languages                   | English                                                                                                           |
 | Inputs                      | Keyboard, Mouse                                                                                                   |
 | Embed options               | 800×600, **Automatically start on page load** off, fullscreen button on, scrollbars off                          |
@@ -44,8 +44,9 @@ source view. If you change one, change the other.
 Two of those rows are worth a sentence each.
 
 **Not `procedural-generation`,** however tempting: the _art_ is generated at
-runtime and the levels are hand-drawn, and that tag means the opposite to
-somebody browsing. Type the tags into the field rather than pasting them and take
+runtime and a run shuffles hand-drawn levels rather than making new ones, and
+that tag means the opposite to somebody browsing. `roguelite` is the honest
+one: runs, perks, permanent unlocks. Type the tags into the field rather than pasting them and take
 itch's autocompletion where it offers it — a tag nobody else uses is a tag nobody
 browses.
 
@@ -63,12 +64,16 @@ game — see `tools/press_kit.sh`. Captions for every file are in
 
 - **Cover image**: `cover-630x500@2x.png`. itch shows it at 630×500 and as small
   as 315×250, and it is the only picture most people will ever see of this game.
-  It is the Citadel screenshot cropped below the HUD, because a bar reading SCORE
-  001500 is a screenshot's furniture and a cover has no use for it.
+  It is not a screenshot: it is the game's own cover screen (`BREAKUP_STATE=cover`,
+  `src/screens/cover-screen.c`) — the title over a fireball going through the
+  wall, drawn at 2x with the game's sprites and bloom — because no frame of play
+  carries the name, and none of them looks like anything is happening.
 - **Screenshots**: the number in the filename is the order — `01` is the one that
   gets seen. The five to use are `01-citadel`, `02-honeycomb`, `03-vault`,
   `04-furnace` and `05-stormfront`: one per world plus the multiball, in that
-  order. `06-levels` is the sixth if you want the level grid on the page.
+  order. `06-perk-draft` is the sixth, and the one to use if only one picture
+  is going to say that this is a roguelite; `19-cash-out` is the other half of
+  that story.
   Use the `@2x` files: itch scales down cleanly and up badly.
 - **Not `15-win`** — it is the last screen of the game. `13-nebula` is the only
   picture of a full five-times cascade and it is worth a devlog or a post, but at
@@ -111,7 +116,7 @@ itch.io's requirement and what `packaging/build_web.sh` does deliberately; it
 starts nowhere otherwise. About 20 MB, most of which is the soundtrack, and the
 page's own progress bar is the download.
 
-The browser build keeps the player's settings, unlocked levels and high scores in
+The browser build keeps the player's settings, unlocked perks and best runs in
 the browser's IndexedDB rather than in a file, so they survive closing the tab —
 but they are per-browser and separate from a downloaded copy's save.
 

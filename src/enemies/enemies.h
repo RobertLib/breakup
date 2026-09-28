@@ -24,8 +24,9 @@ void killEnemy(Enemy *enemy, int score);
 // An enemy left the play area without dying (starts the spawner respawn timer)
 void enemyDespawned(Enemy *enemy);
 
-// Used by explosive bricks
-void killEnemiesInRadius(float x, float y, float radius);
+// Used by explosive bricks, and by a boss going down. `byBlast` is the first
+// of those: an enemy an explosion kills drops a capsule.
+void killEnemiesInRadius(float x, float y, float radius, bool byBlast);
 
 // Fired by shooter enemies, loosely aimed at the paddle.
 //

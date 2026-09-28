@@ -38,7 +38,9 @@ for release in "${SDL3_PINS[@]}"; do
     dmg="$cache/$name-$version.dmg"
     if [ ! -f "$dmg" ]; then
         echo "vendor: downloading $name $version"
-        curl --fail --location --progress-bar --output "$dmg.part" \
+        # `--retry` for the same reason as in build_windows.sh: GitHub's
+        # release-asset CDN answers the odd 5xx that is gone a second later.
+        curl --fail --location --retry 5 --progress-bar --output "$dmg.part" \
             "https://github.com/libsdl-org/$repo/releases/download/release-$version/$name-$version.dmg"
         mv "$dmg.part" "$dmg"
     fi

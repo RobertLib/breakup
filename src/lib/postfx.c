@@ -21,6 +21,11 @@ static SDL_FRect presentRect;
 
 static bool active;
 
+// The last scene composited, and whether it is still there to be composited
+// again: from endScene() until the next beginScene() starts drawing over it.
+static PostFx lastFx;
+static bool sceneReady;
+
 static SDL_Texture *makeTarget(int w, int h)
 {
   SDL_Texture *tex = SDL_CreateTexture(
@@ -128,6 +133,8 @@ bool beginScene(void)
     active = false;
   }
 
+  sceneReady = false;
+
   if (!ensureTargets())
   {
     return false;
@@ -190,26 +197,11 @@ static void buildBloom(void)
   blit(texBlur, SDL_BLENDMODE_NONE, 255);
 }
 
-void endScene(const PostFx *fx)
+// The scene and its bloom, thrown about by `fx`, over `area` of the current
+// target - which is in output pixels, not logical ones.
+static void composite(SDL_FRect area, const PostFx *fx)
 {
-  if (!active)
-  {
-    return;
-  }
-
-  active = false;
-
-  buildBloom();
-
-  SDL_SetRenderTarget(renderer, NULL);
-
-  // Composite in output pixels rather than logical ones, so the scene texture
-  // lands on the display one texel to one pixel. Going through the window's own
-  // 800x600 presentation would scale it down and back up again, and hand back a
-  // softer picture than the one the game drew.
-  SDL_SetRenderLogicalPresentation(renderer, 0, 0, SDL_LOGICAL_PRESENTATION_DISABLED);
-
-  float scale = presentRect.w / (float)SCREEN_WIDTH;
+  float scale = area.w / (float)SCREEN_WIDTH;
 
   // Shake and roll would otherwise swing the edges of the scene inside the
   // frame and show the black behind it, so the same impact that moves the
@@ -220,16 +212,16 @@ void endScene(const PostFx *fx)
   float zoom = fx->zoom * cover;
 
   SDL_FRect dst = {
-      presentRect.x + presentRect.w / 2 - presentRect.w * zoom / 2 + fx->offsetX * scale,
-      presentRect.y + presentRect.h / 2 - presentRect.h * zoom / 2 + fx->offsetY * scale,
-      presentRect.w * zoom,
-      presentRect.h * zoom};
+      area.x + area.w / 2 - area.w * zoom / 2 + fx->offsetX * scale,
+      area.y + area.h / 2 - area.h * zoom / 2 + fx->offsetY * scale,
+      area.w * zoom,
+      area.h * zoom};
 
   // Clipped to where the game's frame belongs, so a shake cannot spill into the
   // letterbox bars around it.
   SDL_Rect clip = {
-      (int)SDL_lroundf(presentRect.x), (int)SDL_lroundf(presentRect.y),
-      (int)SDL_lroundf(presentRect.w), (int)SDL_lroundf(presentRect.h)};
+      (int)SDL_lroundf(area.x), (int)SDL_lroundf(area.y),
+      (int)SDL_lroundf(area.w), (int)SDL_lroundf(area.h)};
   SDL_SetRenderClipRect(renderer, &clip);
 
   SDL_SetTextureBlendMode(texScene, SDL_BLENDMODE_NONE);
@@ -279,8 +271,52 @@ void endScene(const PostFx *fx)
   }
 
   SDL_SetRenderClipRect(renderer, NULL);
+}
+
+void endScene(const PostFx *fx)
+{
+  if (!active)
+  {
+    return;
+  }
+
+  active = false;
+
+  buildBloom();
+
+  SDL_SetRenderTarget(renderer, NULL);
+
+  // Composite in output pixels rather than logical ones, so the scene texture
+  // lands on the display one texel to one pixel. Going through the window's own
+  // 800x600 presentation would scale it down and back up again, and hand back a
+  // softer picture than the one the game drew.
+  SDL_SetRenderLogicalPresentation(renderer, 0, 0, SDL_LOGICAL_PRESENTATION_DISABLED);
+
+  composite(presentRect, fx);
 
   // Back to the state every other screen draws in.
   SDL_SetRenderLogicalPresentation(renderer, SCREEN_WIDTH, SCREEN_HEIGHT,
                                    SDL_LOGICAL_PRESENTATION_LETTERBOX);
+
+  lastFx = *fx;
+  sceneReady = true;
+}
+
+bool compositeSceneInto(SDL_Texture *target)
+{
+  float w, h;
+
+  if (!sceneReady || texScene == NULL || target == NULL ||
+      !SDL_GetTextureSize(target, &w, &h) || !SDL_SetRenderTarget(renderer, target))
+  {
+    return false;
+  }
+
+  SDL_SetRenderLogicalPresentation(renderer, 0, 0, SDL_LOGICAL_PRESENTATION_DISABLED);
+  SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+  SDL_RenderClear(renderer);
+
+  composite((SDL_FRect){0, 0, w, h}, &lastFx);
+
+  return true;
 }

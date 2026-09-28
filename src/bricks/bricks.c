@@ -9,8 +9,10 @@
 #include "../lib/camera.h"
 #include "../lib/effects.h"
 #include "../lib/particles.h"
-#include "../lib/save.h"
 #include "../paddle/paddle.h"
+#include "../run/perks.h"
+#include "../run/run.h"
+#include "../story/presence.h"
 #include "../ui/floating-text.h"
 #include "../utils/list.h"
 
@@ -28,6 +30,7 @@
 
 #define MAX_PENDING_EXPLOSIONS 48
 #define EXPLOSION_RADIUS 88.0f
+#define INFERNO_RADIUS_SCALE 1.75f
 #define EXPLOSION_FUSE 0.14f
 #define ITEM_DROP_CHANCE 0.21f
 
@@ -256,11 +259,11 @@ void checkLevelComplete(void)
   }
 
   paddle.levelCompleted = true;
-  paddle.levelBonus = paddle.lives * 500;
+  paddle.levelBonus = runScoreValue(paddle.lives * 500);
+  presenceReact(PRESENCE_CLEARED);
   paddle.score += paddle.levelBonus;
 
   playSfx(SFX_LEVEL_COMPLETE);
-  unlockLevel(paddle.level);
 }
 
 static void queueExplosion(float x, float y)
@@ -275,39 +278,11 @@ static void queueExplosion(float x, float y)
   }
 }
 
-// The multiplier stepping up is the one moment in a chain worth saying out
-// loud: it is where the player's score per brick actually changes, and it is
-// the only part of the combo that is a decision rather than an accident.
-static void announceCombo(float x, float y, int mult)
-{
-  static const SDL_Color tiers[4] = {
-      {255, 230, 120, 255}, // x2
-      {255, 170, 70, 255},  // x3
-      {255, 110, 160, 255}, // x4
-      {255, 255, 255, 255}, // x5, and the top of the ladder
-  };
-
-  SDL_Color color = tiers[clamp(mult - 2, 0, 3)];
-
-  char label[24];
-  snprintf(label, sizeof(label), "COMBO x%d", mult);
-
-  spawnFloatingText(x, y - 30, label, color);
-  spawnGlowPuff(x, y, color, 80.0f + 18.0f * mult, 0.45f);
-
-  // A push rather than a shake: the frame leaning in says "that counted"
-  // without costing the player sight of a ball that is still in play.
-  addPunch(0.18f + 0.09f * mult);
-  addFlash(color, 0.12f + 0.07f * mult);
-
-  playSfxAt(SFX_GOLD, (mult - 1) * 2.0f);
-}
-
 // Where in the rising scale a break falls: one semitone per unbroken link, up
 // an octave and then held, so a long chain climbs without ever going shrill.
-static float comboSemitones(bool byBall)
+static float comboSemitones(bool buildsCombo)
 {
-  if (!byBall)
+  if (!buildsCombo)
   {
     return 0;
   }
@@ -315,7 +290,7 @@ static float comboSemitones(bool byBall)
   return (float)clamp(combo - 1, 0, 12);
 }
 
-void damageBrick(Brick *brick, int damage, bool byBall, Vec2 impactDir)
+void damageBrick(Brick *brick, int damage, HitSource source, Vec2 impactDir)
 {
   if (brick == NULL || !brick->active)
   {
@@ -325,14 +300,19 @@ void damageBrick(Brick *brick, int damage, bool byBall, Vec2 impactDir)
   float cx = brick->pos.x + BRICK_WIDTH / 2.0f;
   float cy = brick->pos.y + BRICK_HEIGHT / 2.0f;
 
-  if (brick->kind == BRICK_SOLID)
+  // MELTDOWN: a fireball goes through steel the way it goes through anything
+  // else. The ball is the only thing it hands the perk to - an explosion or a
+  // bolt still stops at steel, fireball or not.
+  bool melts = source == HIT_BALL && fireballActive() && runHasPerk(PERK_MELTDOWN);
+
+  if (brick->kind == BRICK_SOLID && !melts)
   {
     spawnGlowPuff(cx, cy, (SDL_Color){200, 220, 255, 255}, 30, 0.2f);
     playSfx(SFX_BALL_WALL);
     return;
   }
 
-  brick->hp -= damage;
+  brick->hp -= brick->kind == BRICK_SOLID ? brick->hp : damage;
 
   if (brick->hp > 0)
   {
@@ -347,24 +327,33 @@ void damageBrick(Brick *brick, int damage, bool byBall, Vec2 impactDir)
   brick->active = false;
   spawnDyingBrick(brick);
 
-  int mult = byBall ? comboMultiplier() : 1;
-  int points = brick->value * mult;
+  // What the combo does with the hit depends on what landed it. A ball's break
+  // is the combo; an explosion's is paid at the multiplier the ball that lit
+  // it built, which is what makes a chain reaction worth setting up, and
+  // extends it only with CHAIN REACTION; a laser bolt is plain points unless
+  // the run holds TRACER ROUNDS; and the arena going up with a boss is a
+  // clean-up and pays like one.
+  bool tracer = source == HIT_LASER && runHasPerk(PERK_TRACER);
+  bool scoresAtCombo = source == HIT_BALL || source == HIT_EXPLOSION || tracer;
+  bool buildsCombo = source == HIT_BALL || tracer ||
+                     (source == HIT_EXPLOSION && runHasPerk(PERK_CHAIN_REACTION));
+
+  int mult = scoresAtCombo ? comboMultiplier() : 1;
+  int points = runScoreValue(brick->value * mult);
 
   addScore(points);
 
-  if (byBall)
+  if (buildsCombo)
   {
-    registerBallBrickBreak();
-
-    if (comboMultiplier() > mult)
-    {
-      announceCombo(cx, cy, comboMultiplier());
-    }
+    addComboLinks(1, cx, cy);
   }
 
-  char text[16];
-  snprintf(text, sizeof(text), "%d", points);
-  spawnFloatingText(cx, cy - 6, text, (SDL_Color){255, 255, 255, 255});
+  if (points > 0)
+  {
+    char text[16];
+    snprintf(text, sizeof(text), "%d", points);
+    spawnFloatingText(cx, cy - 6, text, (SDL_Color){255, 255, 255, 255});
+  }
 
   SDL_Color burstColor = brick->tint;
   if (brick->kind == BRICK_GOLD)
@@ -375,31 +364,41 @@ void damageBrick(Brick *brick, int damage, bool byBall, Vec2 impactDir)
   switch (brick->kind)
   {
   case BRICK_GOLD:
-    playSfxAt(SFX_GOLD, comboSemitones(byBall));
+    playSfxAt(SFX_GOLD, comboSemitones(buildsCombo));
     spawnImpactBurst(cx, cy, burstColor, 18, 240, impactDir);
     break;
   case BRICK_FINAL:
     playSfx(SFX_CRYSTAL);
+    presenceReact(PRESENCE_CRYSTAL);
     spawnBurst(cx, cy, burstColor, 26, 280);
     spawnGlowPuff(cx, cy, burstColor, 110, 0.5f);
     addTrauma(0.5f);
     addPunch(0.55f);
     addHitstop(0.1f);
     addFlash(burstColor, 0.55f);
+
+    if (runHasPerk(PERK_CRYSTAL_BLAST))
+    {
+      queueExplosion(cx, cy);
+    }
     break;
   case BRICK_EXPLOSIVE:
+    noteDetonation();
     queueExplosion(cx, cy);
     spawnBurst(cx, cy, burstColor, 10, 180);
     break;
   default:
-    playSfxAt(SFX_BRICK_BREAK, comboSemitones(byBall));
+    playSfxAt(SFX_BRICK_BREAK, comboSemitones(buildsCombo));
     spawnImpactBurst(cx, cy, burstColor, 14, 220, impactDir);
     break;
   }
 
-  // Power-up drop
+  // Power-up drop. GOLD FEVER makes a gold brick a sure thing; everything else
+  // rolls against the base chance as the run has scaled it.
+  bool feverDrop = brick->kind == BRICK_GOLD && runHasPerk(PERK_GOLD_FEVER);
+
   if (brick->kind != BRICK_FINAL && brick->kind != BRICK_EXPLOSIVE &&
-      frand() < ITEM_DROP_CHANCE)
+      (feverDrop || frand() < ITEM_DROP_CHANCE * runItemDropScale()))
   {
     trySpawnBrickItem(cx - GFX_ITEM_W / 2.0f, brick->pos.y);
   }
@@ -409,13 +408,24 @@ void damageBrick(Brick *brick, int damage, bool byBall, Vec2 impactDir)
 
 static void detonate(float x, float y)
 {
+  // INFERNO widens the blast while the fireball is lit - and a wider blast
+  // reaches the next explosive brick sooner, which is the whole of the perk.
+  float radius = EXPLOSION_RADIUS;
+
+  if (fireballActive() && runHasPerk(PERK_INFERNO))
+  {
+    radius *= INFERNO_RADIUS_SCALE;
+  }
+
+  float scale = radius / EXPLOSION_RADIUS;
+
   addTrauma(0.65f);
   addPunch(0.6f);
   addHitstop(0.075f);
   addFlash((SDL_Color){255, 180, 90, 255}, 0.65f);
   playSfx(SFX_EXPLOSION);
-  spawnBurst(x, y, (SDL_Color){255, 160, 60, 255}, 30, 330);
-  spawnGlowPuff(x, y, (SDL_Color){255, 190, 90, 255}, 190, 0.45f);
+  spawnBurst(x, y, (SDL_Color){255, 160, 60, 255}, 30, 330 * scale);
+  spawnGlowPuff(x, y, (SDL_Color){255, 190, 90, 255}, 190 * scale, 0.45f);
 
   for (int i = 0; i < numBricks; i++)
   {
@@ -431,14 +441,14 @@ static void detonate(float x, float y)
     float dx = bx - x;
     float dy = by - y;
 
-    if (dx * dx + dy * dy <= EXPLOSION_RADIUS * EXPLOSION_RADIUS)
+    if (dx * dx + dy * dy <= radius * radius)
     {
-      damageBrick(b, 3, false, vec2Norm((Vec2){dx, dy}, 1.0f));
+      damageBrick(b, 3, HIT_EXPLOSION, vec2Norm((Vec2){dx, dy}, 1.0f));
     }
   }
 
-  killEnemiesInRadius(x, y, EXPLOSION_RADIUS);
-  damageBossArmorAt(x, y, EXPLOSION_RADIUS);
+  killEnemiesInRadius(x, y, radius, true);
+  damageBossArmorAt(x, y, radius);
 }
 
 void initializeBricks(void)
@@ -448,6 +458,12 @@ void initializeBricks(void)
   destroyBricks();
 
   levelHasFinal = false;
+
+  // A level begins here however it was reached - a new game, a restart, the
+  // next level or the next stage of a run - so this is where the per-level
+  // counters behind the unlocks and the once-a-level perks start again.
+  noteLevelStarted();
+  runLevelStarted();
 
   clearDyingBricks();
 
@@ -464,7 +480,7 @@ void initializeBricks(void)
     pendingExplosions[i].active = false;
   }
 
-  const Level *currentLevel = getLevel(paddle.level);
+  const Level *currentLevel = levelAsPlayed(paddle.level);
 
   int lastBrickRow = 0;
 

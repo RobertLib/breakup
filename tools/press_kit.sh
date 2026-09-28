@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Photograph the game: seventeen stills, four animations, the itch.io cover and a
+# Photograph the game: nineteen stills, four animations, the itch.io cover and a
 # wallpaper, into dist/press/ with a MANIFEST.txt naming what each file is and
 # the command that produced it. It also refreshes docs/screenshot.png, which is
 # the only thing it writes outside that directory - see the end of the file.
@@ -114,22 +114,11 @@ export SDL_AUDIODRIVER=dummy
 view_w=$(sed -n 's/^#define SCREEN_WIDTH \([0-9][0-9]*\).*/\1/p' "$root/src/globals.h" | tail -1)
 view_h=$(sed -n 's/^#define SCREEN_HEIGHT \([0-9][0-9]*\).*/\1/p' "$root/src/globals.h" | tail -1)
 fps=$(sed -n 's/^#define FPS \([0-9][0-9]*\).*/\1/p' "$root/src/globals.h" | tail -1)
-# The height of the HUD panel, which the cover is cropped below. globals.h owns
-# this number - it is the world's ceiling as well as the panel, so three files
-# measure from it. src/ui/status-bar.c keeps only a PANEL_HEIGHT alias for it,
-# and reading that alias is what broke this script when the number moved.
-panel=$(sed -n 's/^#define STATUS_BAR_HEIGHT \([0-9][0-9]*\).*/\1/p' "$root/src/globals.h" | tail -1)
-if [ -z "$view_w" ] || [ -z "$view_h" ] || [ -z "$fps" ] || [ -z "$panel" ]; then
-    echo "press: could not read SCREEN_WIDTH/SCREEN_HEIGHT/FPS/STATUS_BAR_HEIGHT" \
-         "from src/globals.h" >&2
+if [ -z "$view_w" ] || [ -z "$view_h" ] || [ -z "$fps" ]; then
+    echo "press: could not read SCREEN_WIDTH/SCREEN_HEIGHT/FPS from src/globals.h" >&2
     exit 1
 fi
 
-# Every level file is a level, so this is the level count without a second place
-# to keep it. The level select screen is the one screen a scripted run cannot
-# photograph honestly without it: it starts from the shipped save, where exactly
-# one level is unlocked, so the grid would be twenty-six padlocks and no names.
-levels=$(find "$root/assets/levels" -name 'level*.txt' | wc -l | tr -d ' ')
 
 # Injected key presses, by USB scancode, which is what BREAKUP_KEYS speaks.
 # 44 is Space - the launch, and afterwards the trigger for lasers and for
@@ -153,7 +142,8 @@ manifest=$out/MANIFEST.txt
     echo "#"
     echo "# Rebuilt by tools/press_kit.sh against $(cd "$root" && git rev-parse --short HEAD 2>/dev/null || echo 'an untracked tree')."
     echo "# Every frame is captured headless on the dummy video driver, at the game's"
-    echo "# logical frame (${view_w}x${view_h}) and the settings it ships with: BREAKUP_SHOT"
+    echo "# logical frame (${view_w}x${view_h}, or the multiple of it a BREAKUP_SHOT_SCALE"
+    echo "# below asks for) and the settings it ships with: BREAKUP_SHOT"
     echo "# makes the run a scripted one, so nothing on the disk of whoever ran this"
     echo "# reached the pictures and nothing here reached theirs. The commands below"
     echo "# reproduce the files exactly, byte for byte, from this commit."
@@ -168,10 +158,21 @@ manifest=$out/MANIFEST.txt
 # that came back at the wrong size because something else decided how big the
 # window was - and a press run that quietly produced nothing is how a store page
 # ends up showing the previous version.
+#
+# The size expected is the logical frame times BREAKUP_SHOT_SCALE, read off the
+# same argument the game is given rather than passed alongside it, so that the
+# two cannot disagree.
 capture()
 {
     local name=$1 frame=$2 frames=$3 step=$4
     shift 4
+
+    local scale=1 arg
+    for arg in "$@"; do
+        case $arg in
+            BREAKUP_SHOT_SCALE=*) scale=${arg#*=} ;;
+        esac
+    done
 
     local status=0
     env BREAKUP_SEED="$seed" \
@@ -202,10 +203,11 @@ capture()
         return 1
     fi
 
-    local sizes
+    local sizes want
+    want="$((view_w * scale))x$((view_h * scale))"
     sizes=$(grep -o '([0-9]*x[0-9]*)' "$log" | sort -u | tr -d '()' | tr '\n' ' ')
-    if [ "$sizes" != "${view_w}x${view_h} " ]; then
-        echo "press: $name came out at $sizes, not ${view_w}x${view_h}"
+    if [ "$sizes" != "$want " ]; then
+        echo "press: $name came out at $sizes, not $want"
         failures=$((failures + 1))
         return 1
     fi
@@ -327,8 +329,11 @@ still 04-furnace     1300 "World 3, Furnace: explosive bricks going off in a cha
     BREAKUP_LEVEL=14 BREAKUP_AUTOPLAY=1 BREAKUP_KEYS=$launch
 still 05-stormfront  2050 "World 4, Stormfront: divers coming down at the paddle" \
     BREAKUP_LEVEL=25 BREAKUP_AUTOPLAY=1 BREAKUP_KEYS=$launch
-still 06-levels        90 "Level select: twenty-seven levels across four worlds" \
-    BREAKUP_STATE=levels BREAKUP_UNLOCKED=$levels
+# Opened on arrival by BREAKUP_OVERLAY rather than by playing a level to its
+# end, which no capture could do in a length of run worth waiting for; the seed
+# pins which three perks are on the cards.
+still 06-perk-draft    90 "One of three perks after every level" \
+    BREAKUP_RUN=7 BREAKUP_OVERLAY=1
 still 07-title        210 "The title screen" \
     BREAKUP_STATE=intro
 still 08-bastion     1800 "Lasers, in the steel maze of Bastion" \
@@ -344,7 +349,7 @@ still 10-pause        520 "The pause menu, over a live field" \
 still 11-menu          90 "The main menu" \
     BREAKUP_STATE=menu
 still 12-options      150 "Options: music, sound and fullscreen, and they persist" \
-    BREAKUP_STATE=menu BREAKUP_KEYS=60:$down,64:$down,68:$down,72:$enter
+    BREAKUP_STATE=menu BREAKUP_KEYS=60:$down,64:$down,68:$down,72:$down,76:$enter
 # In the kit because it is the only picture of a full combo cascade, and not one
 # of the store page's five because at gallery size it is a wall of floating
 # numbers. It is also the shot that found the HUD's one layout bug: the combo
@@ -352,7 +357,7 @@ still 12-options      150 "Options: music, sound and fullscreen, and they persis
 # when a cascade is running (see drawStatusBar in src/ui/status-bar.c).
 still 13-nebula       800 "A five-times combo cascade in Nebula, at 500 a brick" \
     BREAKUP_LEVEL=21 BREAKUP_AUTOPLAY=1 BREAKUP_KEYS=$launch
-still 14-gameover     150 "Game over, on the first level" \
+still 14-gameover     150 "Run over" \
     BREAKUP_STATE=gameover BREAKUP_SCORE=2450
 # SPOILER. It is the last screen of the game and it is in here because a press
 # kit is not only a store page - a review, a devlog and a trailer's last second
@@ -360,6 +365,10 @@ still 14-gameover     150 "Game over, on the first level" \
 # not one of them.
 still 15-win          200 "SPOILER: the last screen of the game" \
     BREAKUP_STATE=win BREAKUP_SCORE=68400
+still 18-perks         90 "The perk collection, and what unlocks the rest of it" \
+    BREAKUP_STATE=menu BREAKUP_KEYS=60:$down,64:$down,68:$enter
+still 19-cash-out      90 "After a boss: cash out, or go deeper under a new curse" \
+    BREAKUP_RUN=7 BREAKUP_RUN_STAGE=3 BREAKUP_OVERLAY=1
 
 # ---------------------------------------------------------------------------
 # The animations.
@@ -384,40 +393,50 @@ animation 33-loop-stormfront 1900 "Four divers, one paddle" \
     BREAKUP_LEVEL=25 BREAKUP_AUTOPLAY=1 BREAKUP_KEYS=$launch
 
 # ---------------------------------------------------------------------------
-# The derived artwork.
+# The cover.
 #
 # itch.io asks for one image at a fixed shape - 630x500, shown as small as
-# 315x250 - and it is the only picture most people will ever see of this game.
-# The title screen is the obvious candidate and the wrong one: at 315x250 it is
-# a small logotype in three quarters of an empty nebula, in a gallery of covers
-# built to be read at exactly that size. So the cover is the game instead, cut
-# out of the Citadel still below the HUD - a bar reading SCORE 001500 is a
-# screenshot's furniture and a cover has no use for it - which leaves rows of
-# neon bricks, a ball with its trail and the paddle. That says brick-breaker
-# from across the page, which is the entire job.
+# 315x250 - and it is the only picture most people will ever see of this game,
+# in a grid of covers painted to be read at exactly that size. It has two jobs
+# there: say the name, and make somebody want to click.
 #
-# Which frame it comes from is one line, and 09-core (denser, purple) is the
-# alternative worth trying if this one ever stops looking right.
+# No capture of play does either. This used to be the Citadel still cropped
+# below the HUD - rows of tidy bricks, a ball the size of a pea, no name
+# anywhere - and the title screen is the opposite failure: a name in three
+# quarters of an empty nebula. So the cover is a screen of its own,
+# BREAKUP_STATE=cover (src/screens/cover-screen.c): the title over the instant a
+# fireball goes through the wall, staged but drawn with the game's own sprites,
+# particles and bloom, so it is rebuilt here like everything else.
 #
-# Resized with a smooth filter rather than the point-then-Lanczos a pixel-art
-# cover needs: nothing here is drawn on a pixel grid - the bricks are gradients,
-# the ball is a glow and the text is anti-aliased - so nearest neighbour would
-# only add stair-steps to curves that never had them.
+# At twice the logical frame, which the game draws natively rather than this
+# script scaling up (see BREAKUP_SHOT_SCALE in src/main.c): 630x500 is a little
+# narrower than 4:3, so the full height is kept, the middle 756 of the 800 is
+# cut out of it, and at 2x that is 1512x1200 - enough to come *down* to
+# 1260x1000 rather than go up to it. The cover screen's layout keeps inside
+# that cut.
+#
+# The frame is the moment. The blast is thrown when the screen opens and only
+# flies from then on, so ten frames in is a sixth of a second after the hit:
+# the debris clear of the hole, the sparks still bright.
 # ---------------------------------------------------------------------------
-if [ -n "$im" ] && [ -f "$work/01-citadel.bmp" ]; then
-    cover_h=$((view_h - panel))
+cover_frame=10
+cover_scale=2
+if [ -n "$im" ] && capture cover "$cover_frame" 1 1 \
+        BREAKUP_STATE=cover BREAKUP_SHOT_SCALE=$cover_scale; then
+    cover_h=$((view_h * cover_scale))
     cover_w=$((cover_h * 630 / 500))
-    cover_x=$(((view_w - cover_w) / 2))
+    cover_x=$(((view_w * cover_scale - cover_w) / 2))
 
-    "$im" "$work/01-citadel.bmp" \
-        -crop "${cover_w}x${cover_h}+${cover_x}+${panel}" +repage \
+    "$im" "$work/cover.bmp" \
+        -crop "${cover_w}x${cover_h}+${cover_x}+0" +repage \
         -filter Lanczos -resize 1260x1000\! -strip "$out/cover-630x500@2x.png"
     "$im" "$out/cover-630x500@2x.png" -filter Lanczos -resize 630x500\! -strip \
         "$out/cover-630x500.png"
 
-    printf '%-26s %s\n%-26s   # 01-citadel, cropped %s and resized\n\n' \
+    printf '%-26s %s\n%-26s   %s\n%-26s   # cropped %s and resized\n\n' \
         "cover-630x500.png" "itch.io cover art (and @2x)" \
-        "" "${cover_w}x${cover_h}+${cover_x}+${panel}" >>"$manifest"
+        "" "$(recipe "$cover_frame" cover 1 1 BREAKUP_STATE=cover BREAKUP_SHOT_SCALE=$cover_scale)" \
+        "" "${cover_w}x${cover_h}+${cover_x}+0" >>"$manifest"
     echo "press: cover-630x500.png"
 fi
 

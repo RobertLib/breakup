@@ -1,10 +1,9 @@
 #include "game-state.h"
-#include "../screens/game-over-screen.h"
+#include "../screens/cover-screen.h"
 #include "../screens/intro-screen.h"
-#include "../screens/level-select-screen.h"
 #include "../screens/menu-screen.h"
 #include "../screens/playing-screen.h"
-#include "../screens/win-screen.h"
+#include "../screens/run-over-screen.h"
 #include <stdbool.h>
 
 GameState nextGameState;
@@ -48,17 +47,14 @@ void initializeGameState(void)
   case GAME_STATE_MENU_SCREEN:
     initializeMenuScreen();
     break;
-  case GAME_STATE_LEVEL_SELECT_SCREEN:
-    initializeLevelSelectScreen();
-    break;
   case GAME_STATE_PLAYING_SCREEN:
     initializePlaying();
     break;
-  case GAME_STATE_GAME_OVER_SCREEN:
-    initializeGameOverScreen();
+  case GAME_STATE_RUN_OVER_SCREEN:
+    initializeRunOverScreen();
     break;
-  case GAME_STATE_WIN_SCREEN:
-    initializeWinScreen();
+  case GAME_STATE_COVER_SCREEN:
+    initializeCoverScreen();
     break;
   }
 }
@@ -73,17 +69,14 @@ void updateGameState(void)
   case GAME_STATE_MENU_SCREEN:
     updateMenuScreen();
     break;
-  case GAME_STATE_LEVEL_SELECT_SCREEN:
-    updateLevelSelectScreen();
-    break;
   case GAME_STATE_PLAYING_SCREEN:
     updatePlaying();
     break;
-  case GAME_STATE_GAME_OVER_SCREEN:
-    updateGameOverScreen();
+  case GAME_STATE_RUN_OVER_SCREEN:
+    updateRunOverScreen();
     break;
-  case GAME_STATE_WIN_SCREEN:
-    updateWinScreen();
+  case GAME_STATE_COVER_SCREEN:
+    updateCoverScreen();
     break;
   }
 }
@@ -98,17 +91,14 @@ void drawGameState(void)
   case GAME_STATE_MENU_SCREEN:
     drawMenuScreen();
     break;
-  case GAME_STATE_LEVEL_SELECT_SCREEN:
-    drawLevelSelectScreen();
-    break;
   case GAME_STATE_PLAYING_SCREEN:
     drawPlaying();
     break;
-  case GAME_STATE_GAME_OVER_SCREEN:
-    drawGameOverScreen();
+  case GAME_STATE_RUN_OVER_SCREEN:
+    drawRunOverScreen();
     break;
-  case GAME_STATE_WIN_SCREEN:
-    drawWinScreen();
+  case GAME_STATE_COVER_SCREEN:
+    drawCoverScreen();
     break;
   }
 }
@@ -123,17 +113,14 @@ void destroyGameState(void)
   case GAME_STATE_MENU_SCREEN:
     destroyMenuScreen();
     break;
-  case GAME_STATE_LEVEL_SELECT_SCREEN:
-    destroyLevelSelectScreen();
-    break;
   case GAME_STATE_PLAYING_SCREEN:
     destroyPlaying();
     break;
-  case GAME_STATE_GAME_OVER_SCREEN:
-    destroyGameOverScreen();
+  case GAME_STATE_RUN_OVER_SCREEN:
+    destroyRunOverScreen();
     break;
-  case GAME_STATE_WIN_SCREEN:
-    destroyWinScreen();
+  case GAME_STATE_COVER_SCREEN:
+    destroyCoverScreen();
     break;
   }
 }

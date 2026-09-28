@@ -242,6 +242,32 @@ SDL_Texture *renderTextBlended(TTF_Font *font, const char *text, SDL_Color fg)
       TTF_RenderText_Blended(font, drawableText(text), 0, fg));
 }
 
+SDL_Texture *renderTextWrapped(TTF_Font *font, const char *text, SDL_Color fg,
+                               int wrapWidth, bool centered)
+{
+  // The font is rasterized at TEXT_SCALE, so the width it wraps at is too.
+  //
+  // The line skip goes up for the one call: this face is an 8x8 pixel font
+  // whose lines are exactly as tall as its capitals, so stacked at its own
+  // skip one line's descenders touch the next line's tops. Every other label
+  // is a single line and never reads it.
+  // The alignment is the font's too, and put back the same way.
+  int skip = TTF_GetFontLineSkip(font);
+  TTF_HorizontalAlignment align = TTF_GetFontWrapAlignment(font);
+
+  TTF_SetFontLineSkip(font, skip * 3 / 2);
+  TTF_SetFontWrapAlignment(font, centered ? TTF_HORIZONTAL_ALIGN_CENTER
+                                          : TTF_HORIZONTAL_ALIGN_LEFT);
+
+  SDL_Surface *surface = TTF_RenderText_Blended_Wrapped(
+      font, drawableText(text), 0, fg, wrapWidth * TEXT_SCALE);
+
+  TTF_SetFontLineSkip(font, skip);
+  TTF_SetFontWrapAlignment(font, align);
+
+  return textureFromTextSurface(surface);
+}
+
 Vec2 vec2Norm(Vec2 vec, float m)
 {
   float length = sqrtf(vec.x * vec.x + vec.y * vec.y);

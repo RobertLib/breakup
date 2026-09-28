@@ -47,6 +47,16 @@
 #define BREAKUP_OFFERS_QUIT 1
 #endif
 
+// Whether this build can save a clip of the last few seconds as a GIF (see
+// src/lib/clip.h). A browser tab has a filesystem, but it is IndexedDB behind
+// the page and nothing a player can open afterwards, so the web build neither
+// records nor offers the key - and does not pay for the ring buffer either.
+#ifdef __EMSCRIPTEN__
+#define BREAKUP_OFFERS_CLIPS 0
+#else
+#define BREAKUP_OFFERS_CLIPS 1
+#endif
+
 #define SCREEN_WIDTH 800
 #if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
 #define SCREEN_HEIGHT 1350
@@ -148,10 +158,9 @@ extern bool isKeyPressed[SDL_SCANCODE_COUNT];
 // isKeyPressed, plus the keyboard's own auto-repeat while a key is held.
 //
 // Only the things that walk a list or slide a bar read this one - the menu
-// arrows, the level select grid, the pause menu, the two volume sliders. Held
-// down, an edge-triggered arrow does nothing at all, which made a ten-step
-// volume control ten separate presses and a twenty-seven card grid a lot of
-// tapping.
+// arrows, the perk collection, the pause menu, the perk draft, the two volume
+// sliders. Held down, an edge-triggered arrow does nothing at all, which made
+// a ten-step volume control ten separate presses.
 //
 // Everything that commits to something stays on isKeyPressed, and the
 // fullscreen row in the options is the reason it has to: repeating a toggle is
@@ -180,12 +189,9 @@ static inline int clampInt(int x, int a, int b)
 //
 // C's remainder keeps the sign of its left operand, so `(selection + count -
 // step) % count` is the idiom that walks a list backwards and it is only
-// correct while `step <= count`. The level select grid is where that stopped
-// being true: its column count has a floor of five and the level files are a
-// documented mod point, so a tree with two, three or four levels in it stepped
-// UP to a selection of -1 or -2. Nothing indexed an array with it - the grid
-// draws by walking `i` and comparing - so it showed as no card highlighted and
-// ENTER starting level one whatever the player thought they had picked.
+// correct while `step <= count`. The perk collection is where that stops being
+// true: left and right jump a whole column, and a column is not guaranteed to
+// be shorter than the list.
 //
 // It is here rather than in that screen because it is the same arithmetic the
 // two menus do, and only its own count is compile-time. A screen whose list
@@ -267,5 +273,12 @@ SDL_FPoint getSize(SDL_Texture *texture);
 // Every label in the game goes through here; an empty string is turned into a
 // space rather than handed to SDL_ttf, which refuses one outright.
 SDL_Texture *renderTextBlended(TTF_Font *font, const char *text, SDL_Color fg);
+
+// The same, broken into lines no wider than `wrapWidth` logical pixels. For
+// the few labels that are sentences rather than names - a perk's description,
+// the terms of going deeper. The texture is `wrapWidth` wide whatever the
+// lines come to, so `centered` is what puts a short line in the middle of it.
+SDL_Texture *renderTextWrapped(TTF_Font *font, const char *text, SDL_Color fg,
+                               int wrapWidth, bool centered);
 
 Vec2 vec2Norm(Vec2 vec, float m);

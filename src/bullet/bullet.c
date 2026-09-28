@@ -44,7 +44,7 @@ void updateBullet(Bullet *bullet)
             BRICK_HEIGHT))
     {
       bullet->active = false;
-      damageBrick(brick, 1, false, (Vec2){0, -1});
+      damageBrick(brick, 1, HIT_LASER, (Vec2){0, -1});
       spawnGlowPuff(bullet->pos.x + BULLET_WIDTH / 2.0f, bullet->pos.y,
                     (SDL_Color){255, 150, 120, 255}, 30, 0.2f);
       break;

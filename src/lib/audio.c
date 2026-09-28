@@ -17,6 +17,22 @@ static MusicTrack currentMusic = MUSIC_NONE;
 static float musicVolume = 0.7f;
 static float sfxVolume = 0.8f;
 
+// The Sovereign's voice and the hum under it (see the Voice section below).
+// Four voice tracks because a syllable rings on for a quarter of a second
+// through its own echo and a sentence speaks eight or ten of them a second.
+#define VOICE_TRACKS 4
+
+static MIX_Audio *voiceAudio[VOICE_VOWELS];
+static MIX_Track *voiceTracks[VOICE_TRACKS];
+static int nextVoiceTrack;
+
+static MIX_Audio *droneAudio;
+static MIX_Track *droneTrack;
+static bool dronePlaying;
+static float droneGain;
+
+static float musicDuck = 1.0f;
+
 // ---------------------------------------------------------------------------
 // Synth core
 //
@@ -362,9 +378,238 @@ static MIX_Audio *makeSfx(Sfx which)
     break;
   }
 
+  case SFX_STORY_APPEAR:
+  {
+    // Out of nothing: a low fifth sliding up an octave under a breath of
+    // noise, with a glint high above it that arrives a moment later.
+    buf = newBuffer(1.8, &n);
+    tone(buf, n, 0, 1.5, 55, 110, W_SINE, 0.55f, 0.45f, 1.6f, 0);
+    tone(buf, n, 0, 1.5, 82.5f, 165, W_TRI, 0.22f, 0.55f, 1.8f, 0.003f);
+    tone(buf, n, 0, 0.9, 0, 0, W_NOISE, 0.07f, 0.4f, 3.5f, 0);
+    tone(buf, n, 0.35, 1.1, 1318, 1760, W_SINE, 0.06f, 0.3f, 2.6f, 0.006f);
+    tone(buf, n, 0.45, 1.0, 1976, 2637, W_SINE, 0.035f, 0.3f, 3.0f, 0.006f);
+    applyEcho(buf, n, 0.21, 0.3f);
+    break;
+  }
+
+  case SFX_STORY_PAGE:
+    buf = newBuffer(0.55, &n);
+    tone(buf, n, 0, 0.35, 0, 0, W_NOISE, 0.1f, 0.06f, 9.0f, 0);
+    tone(buf, n, 0, 0.4, 1568, 2093, W_SINE, 0.14f, 0.01f, 8.0f, 0.004f);
+    tone(buf, n, 0.05, 0.35, 2349, 3136, W_SINE, 0.08f, 0.01f, 9.0f, 0.004f);
+    applyEcho(buf, n, 0.12, 0.3f);
+    break;
+
+  case SFX_STORY_SHATTER:
+  {
+    // Glass, a lot of it, over the boom of something much bigger than glass.
+    buf = newBuffer(2.6, &n);
+    tone(buf, n, 0, 1.3, 0, 0, W_NOISE, 0.5f, 0.002f, 3.8f, 0);
+    tone(buf, n, 0, 1.2, 96, 26, W_SINE, 0.85f, 0.002f, 2.6f, 0);
+    tone(buf, n, 0, 0.6, 190, 60, W_SAW, 0.18f, 0.002f, 5.0f, 0);
+
+    for (int i = 0; i < 16; i++)
+    {
+      double at = i * 0.045 + (i % 3) * 0.013;
+      float f = 1700.0f + (float)((i * 733) % 2600);
+
+      tone(buf, n, at, 0.4, f, f * 0.97f, W_SINE, 0.06f, 0.001f, 9.0f, 0);
+    }
+
+    applyEcho(buf, n, 0.27, 0.35f);
+    break;
+  }
+
   default:
     buf = newBuffer(0.05, &n);
     break;
+  }
+
+  return finishBuffer(buf, n);
+}
+
+// ---------------------------------------------------------------------------
+// Voice
+//
+// A syllable is a sung vowel: a sawtooth - which has every harmonic, the way a
+// throat does - run through three resonators tuned to the formants of that
+// vowel, which is the whole of what makes an "ah" different from an "oo". It
+// is sung three times at once, at the root, a fifth above and an octave below,
+// because the Sovereign is not a person and should not sound like one voice.
+// The result is pitched up and down per syllable by the mixer, the way
+// playSfxAt() pitches a brick, which shifts the formants with it: that is the
+// chipmunk effect, and within the few semitones a sentence moves it reads as
+// intonation rather than as a different vowel.
+// ---------------------------------------------------------------------------
+
+typedef struct Resonator
+{
+  float b0, a1, a2;
+  float y1, y2;
+} Resonator;
+
+// A two-pole resonator at `freq` with `bandwidth`, scaled to a gain of about
+// one at the peak so that the three formants can be mixed by hand.
+static Resonator makeResonator(float freq, float bandwidth)
+{
+  float r = expf(-SDL_PI_F * bandwidth / SAMPLE_RATE);
+  float theta = 2.0f * SDL_PI_F * freq / SAMPLE_RATE;
+
+  Resonator res = {0};
+  res.a1 = -2.0f * r * cosf(theta);
+  res.a2 = r * r;
+  res.b0 = (1.0f - r) * sqrtf(1.0f - 2.0f * r * cosf(2.0f * theta) + r * r);
+
+  return res;
+}
+
+static float resonate(Resonator *res, float x)
+{
+  float y = res->b0 * x - res->a1 * res->y1 - res->a2 * res->y2;
+
+  res->y2 = res->y1;
+  res->y1 = y;
+
+  return y;
+}
+
+// Scales the buffer so that its loudest sample is `peak`.
+static void normalize(float *buf, int n, float peak)
+{
+  float loudest = 0;
+
+  for (int i = 0; i < n; i++)
+  {
+    loudest = fmaxf(loudest, fabsf(buf[i]));
+  }
+
+  if (loudest > 0.0001f)
+  {
+    for (int i = 0; i < n; i++)
+    {
+      buf[i] *= peak / loudest;
+    }
+  }
+}
+
+static MIX_Audio *makeVoice(int vowel)
+{
+  // F1, F2 and F3 of A, E, I, O and U, from the usual tables for a low voice.
+  static const float formants[VOICE_VOWELS][3] = {
+      {730, 1090, 2440},
+      {530, 1840, 2480},
+      {300, 2200, 2950},
+      {570, 840, 2410},
+      {330, 870, 2240},
+  };
+  static const float bandwidths[3] = {90, 110, 160};
+  static const float gains[3] = {1.0f, 0.55f, 0.3f};
+
+  // The voices, as a multiple of the root and how loud each is.
+  static const float ratios[2] = {1.0f, 1.5f};
+  static const float voiceGain[2] = {1.0f, 0.4f};
+
+  const double length = 0.13;
+  const float root = 130.8f; // C3
+
+  int n;
+  float *buf = newBuffer(length + 0.14, &n);
+  int voiced = (int)(length * SAMPLE_RATE);
+
+  Resonator res[2][3];
+
+  for (int v = 0; v < 2; v++)
+  {
+    for (int k = 0; k < 3; k++)
+    {
+      res[v][k] = makeResonator(formants[vowel][k], bandwidths[k]);
+    }
+  }
+
+  double phase[2] = {0, 0};
+  double subPhase = 0;
+
+  for (int i = 0; i < voiced; i++)
+  {
+    float t = i / (float)SAMPLE_RATE;
+    float progress = i / (float)voiced;
+
+    // Falls a little over the syllable, as a spoken one does, and wavers.
+    float f0 = root * (1.0f + 0.04f * (1.0f - progress)) *
+               (1.0f + 0.005f * sinf(t * 5.5f * 2.0f * SDL_PI_F));
+
+    // Quick in, held, and rounded off over the last half.
+    float env = t < 0.012f ? t / 0.012f : 1.0f;
+
+    if (progress > 0.5f)
+    {
+      env *= 0.5f + 0.5f * cosf((progress - 0.5f) * 2.0f * SDL_PI_F);
+    }
+
+    float sample = 0;
+
+    for (int v = 0; v < 2; v++)
+    {
+      phase[v] += f0 * ratios[v] / SAMPLE_RATE;
+      phase[v] -= floor(phase[v]);
+
+      float saw = 2.0f * (float)phase[v] - 1.0f;
+      float voice = 0;
+
+      for (int k = 0; k < 3; k++)
+      {
+        voice += gains[k] * resonate(&res[v][k], saw);
+      }
+
+      sample += voice * voiceGain[v];
+    }
+
+    subPhase += 2.0 * SDL_PI_D * f0 * 0.5 / SAMPLE_RATE;
+    sample += sinf((float)subPhase) * 0.05f;
+
+    // The consonant: a breath of noise at the very front of it.
+    if (t < 0.008f)
+    {
+      sample += noiseSample() * 0.06f * (1.0f - t / 0.008f);
+    }
+
+    buf[i] += sample * env;
+  }
+
+  normalize(buf, n, 0.5f);
+  applyEcho(buf, n, 0.085, 0.3f);
+
+  return finishBuffer(buf, n);
+}
+
+// Four seconds that loop without a seam: every partial finishes a whole number
+// of cycles in them (55 Hz is 220 cycles, 82.5 is 330), and so does every
+// swell of the slow tremolo on top. No echo, which would carry the end of the
+// loop into a start that has nothing to match it.
+static MIX_Audio *makeDrone(void)
+{
+  static const float partials[][2] = {
+      {55.0f, 0.34f}, {55.25f, 0.2f}, {82.5f, 0.2f},
+      {110.0f, 0.14f}, {164.75f, 0.06f}, {220.5f, 0.04f}};
+
+  const double length = 4.0;
+  int n;
+  float *buf = newBuffer(length, &n);
+
+  for (size_t p = 0; p < SDL_arraysize(partials); p++)
+  {
+    double phase = 0;
+    double step = 2.0 * SDL_PI_D * partials[p][0] / SAMPLE_RATE;
+    float swell = (float)(p % 3 + 1);
+
+    for (int i = 0; i < n; i++)
+    {
+      float t = i / (float)n;
+      float tremolo = 0.7f + 0.3f * sinf(t * swell * 2.0f * SDL_PI_F + (float)p);
+
+      buf[i] += sinf((float)phase) * partials[p][1] * tremolo;
+      phase += step;
+    }
   }
 
   return finishBuffer(buf, n);
@@ -501,11 +746,24 @@ void initializeAudio(void)
     musicAudio[i] = loadMusic(musicFiles[i]);
   }
 
+  for (int i = 0; i < VOICE_VOWELS; i++)
+  {
+    voiceAudio[i] = makeVoice(i);
+  }
+
+  droneAudio = makeDrone();
+
   musicTrack = MIX_CreateTrack(mixer);
+  droneTrack = MIX_CreateTrack(mixer);
 
   for (int i = 0; i < SFX_TRACK_POOL; i++)
   {
     sfxTracks[i] = MIX_CreateTrack(mixer);
+  }
+
+  for (int i = 0; i < VOICE_TRACKS; i++)
+  {
+    voiceTracks[i] = MIX_CreateTrack(mixer);
   }
 }
 
@@ -531,6 +789,37 @@ void destroyAudio(void)
       MIX_DestroyTrack(sfxTracks[i]);
       sfxTracks[i] = NULL;
     }
+  }
+
+  for (int i = 0; i < VOICE_TRACKS; i++)
+  {
+    if (voiceTracks[i] != NULL)
+    {
+      MIX_DestroyTrack(voiceTracks[i]);
+      voiceTracks[i] = NULL;
+    }
+  }
+
+  if (droneTrack != NULL)
+  {
+    MIX_DestroyTrack(droneTrack);
+    droneTrack = NULL;
+    dronePlaying = false;
+  }
+
+  for (int i = 0; i < VOICE_VOWELS; i++)
+  {
+    if (voiceAudio[i] != NULL)
+    {
+      MIX_DestroyAudio(voiceAudio[i]);
+      voiceAudio[i] = NULL;
+    }
+  }
+
+  if (droneAudio != NULL)
+  {
+    MIX_DestroyAudio(droneAudio);
+    droneAudio = NULL;
   }
 
   for (int i = 0; i < SFX_COUNT; i++)
@@ -602,7 +891,7 @@ void playMusic(MusicTrack track)
 
   MIX_StopTrack(musicTrack, 0);
   MIX_SetTrackAudio(musicTrack, musicAudio[track]);
-  MIX_SetTrackGain(musicTrack, musicVolume);
+  MIX_SetTrackGain(musicTrack, musicVolume * musicDuck);
 
   SDL_PropertiesID props = SDL_CreateProperties();
 
@@ -643,11 +932,92 @@ void setMusicVolume(float v)
 
   if (mixer != NULL && musicTrack != NULL)
   {
-    MIX_SetTrackGain(musicTrack, musicVolume);
+    MIX_SetTrackGain(musicTrack, musicVolume * musicDuck);
   }
+
+  setDroneGain(droneGain);
 }
 
 void setSfxVolume(float v)
 {
   sfxVolume = clamp(v, 0.0f, 1.0f);
+}
+
+void playVoice(int vowel, float semitones, float gain)
+{
+  if (mixer == NULL || sfxVolume <= 0.001f)
+  {
+    return;
+  }
+
+  vowel = wrapIndex(vowel, VOICE_VOWELS);
+
+  MIX_Track *track = voiceTracks[nextVoiceTrack];
+  nextVoiceTrack = (nextVoiceTrack + 1) % VOICE_TRACKS;
+
+  if (track == NULL || voiceAudio[vowel] == NULL)
+  {
+    return;
+  }
+
+  MIX_SetTrackAudio(track, voiceAudio[vowel]);
+  MIX_SetTrackGain(track, sfxVolume * clamp(gain, 0.0f, 1.0f));
+  MIX_SetTrackFrequencyRatio(track, powf(2.0f, semitones / 12.0f));
+  MIX_PlayTrack(track, 0);
+}
+
+void setMusicDuck(float duck)
+{
+  musicDuck = clamp(duck, 0.0f, 1.0f);
+
+  if (mixer != NULL && musicTrack != NULL)
+  {
+    MIX_SetTrackGain(musicTrack, musicVolume * musicDuck);
+  }
+}
+
+void setDroneGain(float gain)
+{
+  droneGain = clamp(gain, 0.0f, 1.0f);
+
+  if (mixer == NULL || droneTrack == NULL || droneAudio == NULL)
+  {
+    return;
+  }
+
+  float level = droneGain * musicVolume;
+
+  if (level <= 0.001f)
+  {
+    if (dronePlaying)
+    {
+      MIX_StopTrack(droneTrack, 0);
+      dronePlaying = false;
+    }
+
+    return;
+  }
+
+  MIX_SetTrackGain(droneTrack, level);
+
+  if (!dronePlaying)
+  {
+    MIX_SetTrackAudio(droneTrack, droneAudio);
+
+    SDL_PropertiesID props = SDL_CreateProperties();
+
+    if (props == 0)
+    {
+      MIX_PlayTrack(droneTrack, 0);
+      MIX_SetTrackLoops(droneTrack, -1);
+    }
+    else
+    {
+      SDL_SetNumberProperty(props, MIX_PROP_PLAY_LOOPS_NUMBER, -1);
+      MIX_PlayTrack(droneTrack, props);
+      SDL_DestroyProperties(props);
+    }
+
+    dronePlaying = true;
+  }
 }

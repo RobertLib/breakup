@@ -8,6 +8,7 @@
 #include "../level-manager.h"
 #include "../lib/audio.h"
 #include "../lib/camera.h"
+#include "../lib/clip.h"
 #include "../lib/effects.h"
 #include "../lib/game-state.h"
 #include "../lib/gfx.h"
@@ -16,21 +17,79 @@
 #include "../lib/save.h"
 #include "../lib/starfield.h"
 #include "../paddle/paddle.h"
+#include "../run/run.h"
+#include "../lib/vector.h"
+#include "../story/pen.h"
+#include "../story/presence.h"
+#include "../story/story.h"
 #include "../types.h"
 #include "../ui/floating-text.h"
+#include "../ui/run-overlay.h"
 #include "../ui/status-bar.h"
 
 #define PAUSE_ITEM_COUNT 3
 
+// Where the pause menu's rows are drawn, which is also where the mouse finds
+// them.
+#define PAUSE_TOP 300.0f
+#define PAUSE_STEP 44.0f
+
 static SDL_Texture *getReadyText;
 static SDL_Texture *levelBannerText;
+static SDL_Texture *mutatorText; // a run's mutator and multiplier, under the banner
 static SDL_Texture *levelCompleteText;
 static SDL_Texture *bonusText;
 static SDL_Texture *pausedText;
+static SDL_Texture *clipHintText;
 static SDL_Texture *pauseItems[PAUSE_ITEM_COUNT];
 
 static int pauseSelection;
 static int bannerLevel = -1;
+static int bannerStage = -1;
+
+// What a run's banner says under the level name: the mutator the stage drew,
+// and what the score is being multiplied by once going deeper has raised it.
+static void rebuildMutatorText(void)
+{
+  if (mutatorText != NULL)
+  {
+    SDL_DestroyTexture(mutatorText);
+    mutatorText = NULL;
+  }
+
+  if (!runActive())
+  {
+    return;
+  }
+
+  char buf[128];
+  Mutator mutator = runMutator();
+  int curses = runCurseCount();
+
+  if (mutator != MUTATOR_NONE && curses > 0)
+  {
+    snprintf(buf, sizeof(buf), "%s - %s\nSCORE X%.1f  -  %d CURSE%s",
+             mutatorName(mutator), mutatorDescription(mutator),
+             runScoreMultiplier(), curses, curses == 1 ? "" : "S");
+  }
+  else if (mutator != MUTATOR_NONE)
+  {
+    snprintf(buf, sizeof(buf), "%s - %s", mutatorName(mutator),
+             mutatorDescription(mutator));
+  }
+  else if (curses > 0)
+  {
+    snprintf(buf, sizeof(buf), "SCORE X%.1f  -  %d CURSE%s",
+             runScoreMultiplier(), curses, curses == 1 ? "" : "S");
+  }
+  else
+  {
+    return;
+  }
+
+  mutatorText = renderTextWrapped(font16, buf, (SDL_Color){255, 170, 90, 255},
+                                  SCREEN_WIDTH - 60, true);
+}
 
 static void rebuildLevelBanner(void)
 {
@@ -40,20 +99,25 @@ static void rebuildLevelBanner(void)
   }
 
   int world = worldForLevel(paddle.level);
+  const char *label = runIsDaily() ? "DAILY" : "ACT";
   char buf[80];
 
-  if (isBossLevel(paddle.level))
+  if (runStageIsBoss())
   {
-    snprintf(buf, sizeof(buf), "BOSS  -  %s", getLevel(paddle.level)->name);
+    snprintf(buf, sizeof(buf), "%s %d BOSS  -  %s", label, runAct() + 1,
+             getLevel(paddle.level)->name);
   }
   else
   {
-    snprintf(buf, sizeof(buf), "WORLD %d  -  %s",
-             world + 1, getLevel(paddle.level)->name);
+    snprintf(buf, sizeof(buf), "%s %d-%d  -  %s", label, runAct() + 1,
+             runStageInAct() + 1, getLevel(paddle.level)->name);
   }
 
   levelBannerText = renderTextBlended(font32, buf, worldThemes[world].glow);
   bannerLevel = paddle.level;
+  bannerStage = runActive() ? runStage() : -1;
+
+  rebuildMutatorText();
 }
 
 static void rebuildBonusText(void)
@@ -74,6 +138,14 @@ static void rebuildBonusText(void)
 
 void initializePlaying(void)
 {
+  // Every game is a run. The menu and the run-over screen start one before
+  // they come here; anything else that lands on this screen - a development
+  // helper, say - gets a fresh one rather than a game with no run behind it.
+  if (!runActive())
+  {
+    setStartLevel(startRun(false));
+  }
+
   initializePaddle();
   initializeBalls();
   initializeBricks();
@@ -81,6 +153,7 @@ void initializePlaying(void)
   initializeBoss();
   initializeCamera();
   initializeStatusBar();
+  presenceBegin();
 
   resetEffects();
   resetBrickItems();
@@ -90,18 +163,95 @@ void initializePlaying(void)
   isPause = false;
   pauseSelection = 0;
   bannerLevel = -1;
+  bannerStage = -1;
 
   getReadyText = renderTextBlended(font24, "GET READY", (SDL_Color){255, 255, 255, 255});
   levelCompleteText = renderTextBlended(font48, "LEVEL COMPLETE!", (SDL_Color){255, 255, 255, 255});
   pausedText = renderTextBlended(font48, "PAUSED", (SDL_Color){255, 255, 255, 255});
 
   pauseItems[0] = renderTextBlended(font24, "RESUME", (SDL_Color){255, 255, 255, 255});
-  pauseItems[1] = renderTextBlended(font24, "RESTART LEVEL", (SDL_Color){255, 255, 255, 255});
+  // No restart: a level begun again is a perk draft and a mutator drawn again,
+  // and the checkpoint that going deeper puts at risk would be one key away
+  // from never being at risk at all.
+  pauseItems[1] = renderTextBlended(font24, "END RUN", (SDL_Color){255, 255, 255, 255});
   pauseItems[2] = renderTextBlended(font24, "QUIT TO MENU", (SDL_Color){255, 255, 255, 255});
 
   rebuildLevelBanner();
 
+#if BREAKUP_OFFERS_CLIPS
+  clipHintText = renderTextBlended(font16, "G - SAVE THE LAST 8 SECONDS AS A GIF",
+                                   (SDL_Color){110, 120, 160, 255});
+#endif
+
   playMusic(musicForLevel(paddle.level));
+
+  // After the paddle, because the prologue's map names the level it is on.
+  storyRunBegan();
+
+  // Development helper: BREAKUP_OVERLAY=1 opens a run's perk draft (or its
+  // cash-out, on a boss stage) straight away, so a capture can photograph it
+  // without playing a level to the end first.
+  if (runActive() && SDL_getenv("BREAKUP_OVERLAY") != NULL)
+  {
+    openRunOverlay();
+  }
+}
+
+static void activatePauseItem(int item)
+{
+  playSfx(SFX_MENU_SELECT);
+
+  switch (item)
+  {
+  case 0:
+    isPause = false;
+    break;
+  // Both of these end the run, and both record it: a score good enough for
+  // the table is not thrown away by an exit that was not dying. Abandoning
+  // costs what dying would, or neither would mean anything.
+  case 1:
+    isPause = false;
+    runFinish(RUN_END_QUIT, paddle.score);
+    nextGameState = GAME_STATE_RUN_OVER_SCREEN;
+    break;
+  case 2:
+    isPause = false;
+    runFinish(RUN_END_QUIT, paddle.score);
+    nextGameState = GAME_STATE_MENU_SCREEN;
+    break;
+  }
+}
+
+// Pointing at a row selects it and clicking it takes it, with the same
+// generous hit box the main menu gives its rows. The click that takes RESUME
+// is spent here: the frame returns before the paddle reads it, so it does not
+// also launch a ball.
+static void handlePauseMouse(void)
+{
+  for (int i = 0; i < PAUSE_ITEM_COUNT; i++)
+  {
+    SDL_FPoint size = getSize(pauseItems[i]);
+    float y = PAUSE_TOP + i * PAUSE_STEP;
+
+    if (motionY < y - 8 || motionY > y + size.y + 8 ||
+        motionX < SCREEN_WIDTH / 2 - 200 || motionX > SCREEN_WIDTH / 2 + 200)
+    {
+      continue;
+    }
+
+    if (mouseMoved && pauseSelection != i)
+    {
+      pauseSelection = i;
+      playSfx(SFX_MENU_MOVE);
+    }
+
+    if (isMousePressed[1])
+    {
+      activatePauseItem(i);
+    }
+
+    return;
+  }
 }
 
 static void updatePauseMenu(void)
@@ -119,34 +269,46 @@ static void updatePauseMenu(void)
 
   if (isKeyPressed[K_RETURN] || isKeyPressed[K_SPACE])
   {
-    playSfx(SFX_MENU_SELECT);
-
-    switch (pauseSelection)
-    {
-    case 0:
-      isPause = false;
-      break;
-    // Both of these end the run - a restart begins a new one from zero, the
-    // same way the game over screen's R does - and recordScore() used to live
-    // on the game over and win screens alone. A score good enough for the table
-    // was thrown away by every exit that was not dying.
-    case 1:
-      isPause = false;
-      recordScore(paddle.score, paddle.level + 1);
-      setStartLevel(paddle.level);
-      requestGameStateRestart();
-      break;
-    case 2:
-      isPause = false;
-      recordScore(paddle.score, paddle.level + 1);
-      nextGameState = GAME_STATE_MENU_SCREEN;
-      break;
-    }
+    activatePauseItem(pauseSelection);
+    return;
   }
+
+  handlePauseMouse();
 }
 
 void updatePlaying(void)
 {
+  // G works whenever there is a game on screen, paused or not: the moment
+  // worth keeping is usually the one that made somebody reach for the key.
+  if (isKeyPressed[SDL_SCANCODE_G] && BREAKUP_OFFERS_CLIPS)
+  {
+    clipSave();
+  }
+
+  // The Sovereign speaking is all there is while it speaks: the level under it
+  // waits exactly where it was, timers and all, and picks up when it is done.
+  if (storyActive())
+  {
+    updateStory();
+    return;
+  }
+
+  // Between two stages of a run the choice is all there is: the ball, the
+  // paddle and the pause menu wait, and the field behind the cards goes on
+  // settling the way it does under the level-complete banner.
+  if (runOverlayActive())
+  {
+    updateRunOverlay();
+    updatePresence();
+    updateCamera();
+    updateBricks();
+    updateParticles();
+    updateFloatingTexts();
+    updateEffects();
+    updateStatusBar();
+    return;
+  }
+
   // Pause toggle
   if ((isKeyPressed[K_ESCAPE] || isKeyPressed[SDL_SCANCODE_P]) &&
       !paddle.levelCompleted)
@@ -164,7 +326,7 @@ void updatePlaying(void)
 
   paddleTimerUpdate();
 
-  if (bannerLevel != paddle.level)
+  if (bannerLevel != paddle.level || (runActive() ? runStage() : -1) != bannerStage)
   {
     rebuildLevelBanner();
   }
@@ -183,6 +345,7 @@ void updatePlaying(void)
     updateCamera();
     updateBricks();
     updateBoss();
+    updatePresence();
     updateParticles();
     updateFloatingTexts();
     updateEffects();
@@ -225,6 +388,7 @@ void updatePlaying(void)
   updateBalls();
   updateBricks();
   updateBoss();
+  updatePresence();
   updateEnemies();
   updateBrickItems();
   updateCamera();
@@ -313,6 +477,30 @@ static void drawCenteredTexture(SDL_Texture *tex, float y)
   SDL_RenderTexture(renderer, tex, NULL, &dst);
 }
 
+// A rule either side of a banner, with the Sovereign's stylus at the inner end
+// of each - the title card its scenes would give a stage.
+static void drawBannerRules(SDL_Texture *tex, float y, SDL_Color color)
+{
+  SDL_FPoint size = getSize(tex);
+  float maxW = SCREEN_WIDTH - 60;
+  float scale = size.x > maxW ? maxW / size.x : 1.0f;
+  float half = size.x * scale / 2.0f;
+  float cy = y + size.y * scale / 2.0f;
+  float left = SCREEN_WIDTH / 2.0f - half - 22.0f;
+  float right = SCREEN_WIDTH / 2.0f + half + 22.0f;
+
+  if (left < 60.0f)
+  {
+    return;
+  }
+
+  vecLine(24.0f, cy, left - 10.0f, cy, 1.0f, color, 0.8f);
+  vecLine(right + 10.0f, cy, SCREEN_WIDTH - 24.0f, cy, 1.0f, color, 0.8f);
+  drawStylus(left, cy, 6.0f, gameTime, color, 1.0f);
+  drawStylus(right, cy, 6.0f, -gameTime, color, 1.0f);
+  vecFlush();
+}
+
 static void drawOverlayBackdrop(Uint8 alpha)
 {
   SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
@@ -323,6 +511,23 @@ static void drawOverlayBackdrop(Uint8 alpha)
 
 void drawPlaying(void)
 {
+  // A scene that covers the screen has nothing under it worth drawing. It
+  // still goes through the scene pass, for the bloom its lines are drawn for.
+  if (storyCoversScreen())
+  {
+    PostFx sceneFx = {.zoom = 1.0f, .bloom = 0.9f};
+    bool scene = beginScene();
+
+    drawStory();
+
+    if (scene)
+    {
+      endScene(&sceneFx);
+    }
+
+    return;
+  }
+
   float shake = shakeAmount();
 
   PostFx fx = {0};
@@ -347,10 +552,12 @@ void drawPlaying(void)
   }
 
   drawBackground(worldForLevel(paddle.level), paddle.level, camera.y);
+  drawPresence();
 
   drawBricks();
   drawBrickItems();
   drawBoss();
+  drawPresenceOnCore();
   drawEnemies();
   drawBalls();
   drawPaddle();
@@ -361,9 +568,22 @@ void drawPlaying(void)
 
   camera.y = savedCameraY;
 
+  // A scene fading in or out, over the field and inside the same pass, so the
+  // two bloom as one picture. Nothing that is drawn after the pass - the HUD,
+  // the banners - is drawn under a scene at all: it would sit on top of it.
+  if (storyActive())
+  {
+    drawStory();
+  }
+
   if (scene)
   {
     endScene(&fx);
+  }
+
+  if (storyActive())
+  {
+    return;
   }
 
   // Everything from here on is read rather than played, so it stays still and
@@ -371,14 +591,29 @@ void drawPlaying(void)
   // it into being harder to read.
   drawStatusBar();
 
-  if (!paddle.isReady && !isPause)
+  // The clip recorder keeps the field and the HUD over it, and nothing that
+  // is drawn from here on: a pause menu or a perk draft is not the moment
+  // anybody wants to show somebody.
+  if (scene && !isPause && !runOverlayActive())
+  {
+    clipCaptureFrame(drawStatusBar);
+  }
+
+  if (!paddle.isReady && !isPause && !runOverlayActive())
   {
     drawOverlayBackdrop(110);
     drawCenteredTexture(levelBannerText, SCREEN_HEIGHT / 2.0f - 50);
+    drawBannerRules(levelBannerText, SCREEN_HEIGHT / 2.0f - 50,
+                    worldThemes[worldForLevel(paddle.level)].glow);
 
     if (fmodf(gameTime, 0.9f) < 0.62f)
     {
       drawCenteredTexture(getReadyText, SCREEN_HEIGHT / 2.0f + 14);
+    }
+
+    if (mutatorText != NULL)
+    {
+      drawCenteredTexture(mutatorText, SCREEN_HEIGHT / 2.0f + 54);
     }
   }
 
@@ -402,22 +637,17 @@ void drawPlaying(void)
     {
       SDL_Texture *tex = pauseItems[i];
       SDL_FPoint size = getSize(tex);
-      float y = 300.0f + i * 44;
+      float y = PAUSE_TOP + i * PAUSE_STEP;
 
       if (i == pauseSelection)
       {
-        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-        SDL_SetRenderDrawColor(renderer, 110, 220, 255, 255);
+        SDL_Color glow = {140, 230, 255, 255};
         float cy = y + size.y / 2;
-        float offset = size.x / 2 + 22;
-        SDL_RenderLine(renderer, SCREEN_WIDTH / 2.0f - offset, cy - 6,
-                       SCREEN_WIDTH / 2.0f - offset + 8, cy);
-        SDL_RenderLine(renderer, SCREEN_WIDTH / 2.0f - offset, cy + 6,
-                       SCREEN_WIDTH / 2.0f - offset + 8, cy);
-        SDL_RenderLine(renderer, SCREEN_WIDTH / 2.0f + offset, cy - 6,
-                       SCREEN_WIDTH / 2.0f + offset - 8, cy);
-        SDL_RenderLine(renderer, SCREEN_WIDTH / 2.0f + offset, cy + 6,
-                       SCREEN_WIDTH / 2.0f + offset - 8, cy);
+        float offset = size.x / 2 + 24 + sinf(gameTime * 6.0f) * 2.0f;
+
+        drawStylus(SCREEN_WIDTH / 2.0f - offset, cy, 7.0f, gameTime, glow, 1.0f);
+        drawStylus(SCREEN_WIDTH / 2.0f + offset, cy, 7.0f, -gameTime, glow, 1.0f);
+        vecFlush();
       }
       else
       {
@@ -428,11 +658,19 @@ void drawPlaying(void)
       SDL_RenderTexture(renderer, tex, NULL, &dst);
       SDL_SetTextureColorMod(tex, 255, 255, 255);
     }
+
+    if (clipHintText != NULL)
+    {
+      drawCenteredTexture(clipHintText, SCREEN_HEIGHT - 60);
+    }
   }
+
+  drawRunOverlay();
 }
 
 void destroyPlaying(void)
 {
+  storyStop();
   destroyPaddle();
   destroyBalls();
   destroyBricks();
@@ -442,9 +680,11 @@ void destroyPlaying(void)
   clearParticles();
   clearFloatingTexts();
 
+  destroyRunOverlay();
+
   SDL_Texture **all[] = {
-      &getReadyText, &levelBannerText, &levelCompleteText,
-      &bonusText, &pausedText};
+      &getReadyText, &levelBannerText, &mutatorText, &levelCompleteText,
+      &bonusText, &pausedText, &clipHintText};
 
   for (size_t i = 0; i < sizeof(all) / sizeof(all[0]); i++)
   {

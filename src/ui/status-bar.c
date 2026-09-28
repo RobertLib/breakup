@@ -6,6 +6,7 @@
 #include "../lib/effects.h"
 #include "../lib/gfx.h"
 #include "../paddle/paddle.h"
+#include "../run/run.h"
 #include "../types.h"
 
 // The panel and the world's ceiling are the same edge; globals.h owns it.
@@ -25,6 +26,7 @@ static float displayScore;
 static int shownScore = -1;
 static int shownCombo = -1;
 static int shownLevel = -1;
+static int shownStage = -1;
 static int shownLivesExtra = -1;
 
 static void rebuildScore(int value)
@@ -68,7 +70,10 @@ static void rebuildLivesExtra(int extra)
 
   if (extra > 0)
   {
-    char buf[8];
+    // Wide enough for any int, for GCC's sake rather than the game's: the
+    // lives cap at nine, but `make win` warns about the truncation it cannot
+    // see is impossible.
+    char buf[12];
     snprintf(buf, sizeof(buf), "+%d", extra);
     livesExtraText = renderTextBlended(font16, buf, (SDL_Color){140, 235, 255, 255});
   }
@@ -83,23 +88,24 @@ static void rebuildLevel(void)
     SDL_DestroyTexture(levelText);
   }
 
-  int world = worldForLevel(paddle.level);
   char buf[64];
 
-  if (isBossLevel(paddle.level))
+  // Where the player is in the run rather than where the file sits among the
+  // levels: "W3-2" would mean nothing about the third stage of a first act.
+  if (runActive())
   {
-    snprintf(buf, sizeof(buf), "BOSS  %s", getLevel(paddle.level)->name);
+    snprintf(buf, sizeof(buf), "%s %d-%d  %s",
+             runIsDaily() ? "DAILY" : "ACT", runAct() + 1,
+             runStageInAct() + 1, getLevel(paddle.level)->name);
   }
   else
   {
-    snprintf(buf, sizeof(buf), "W%d-%d  %s",
-             world + 1,
-             levelInWorld(paddle.level),
-             getLevel(paddle.level)->name);
+    snprintf(buf, sizeof(buf), "%s", getLevel(paddle.level)->name);
   }
 
   levelText = renderTextBlended(font16, buf, (SDL_Color){190, 200, 230, 255});
   shownLevel = paddle.level;
+  shownStage = runActive() ? runStage() : -1;
 }
 
 void initializeStatusBar(void)
@@ -108,6 +114,7 @@ void initializeStatusBar(void)
   shownScore = -1;
   shownCombo = -1;
   shownLevel = -1;
+  shownStage = -1;
   shownLivesExtra = -1;
 
   rebuildScore(0);
@@ -152,6 +159,15 @@ static void drawEffectChips(void)
     chips[numChips++] = (Chip){ITEM_SHIELD, effects.shield, EFFECT_SHIELD_DURATION};
   }
 
+  float scale = runPowerUpDurationScale();
+
+  // The totals the bars are drawn against are the stretched ones under
+  // OVERTIME, or a fresh fireball would start its bar half again too long.
+  for (int i = 0; i < numChips; i++)
+  {
+    chips[i].total *= scale;
+  }
+
   float typeLeft = paddleTypeTimeLeft();
   if (typeLeft > 0)
   {
@@ -178,7 +194,7 @@ static void drawEffectChips(void)
 
     if (typeLeft > 0)
     {
-      chips[numChips++] = (Chip){icon, typeLeft, PADDLE_TYPE_DURATION};
+      chips[numChips++] = (Chip){icon, typeLeft, paddleTypeDuration()};
     }
   }
 
@@ -220,7 +236,7 @@ void drawStatusBar(void)
   {
     rebuildCombo(comboMultiplier());
   }
-  if (paddle.level != shownLevel)
+  if (paddle.level != shownLevel || (runActive() ? runStage() : -1) != shownStage)
   {
     rebuildLevel();
   }

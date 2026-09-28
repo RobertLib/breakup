@@ -53,10 +53,18 @@ void setStartScore(int score);
 
 void changePaddleType(PaddleType type);
 
+// How long a timed paddle type lasts: PADDLE_TYPE_DURATION, stretched by
+// OVERTIME in a run that holds it.
+float paddleTypeDuration(void);
+
 // Seconds until a temporary paddle type reverts (0 when default)
 float paddleTypeTimeLeft(void);
 
 void paddleNextLevelUpdate(void);
+
+// Tears the current level down and builds `level` in its place, keeping the
+// score and the lives: the step between two stages of a run.
+void paddleGoToLevel(int level);
 
 void paddleTimerUpdate(void);
 

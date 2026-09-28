@@ -9,15 +9,25 @@
 #include "../lib/gfx.h"
 #include "../lib/particles.h"
 #include "../paddle/paddle.h"
+#include "../run/perks.h"
+#include "../run/run.h"
 
 static const float MAX_SPEED = 620;
 static const float SPEED_PER_HIT = 4;
 static const float MIN_VERTICAL_RATIO = 0.32f;
 
+// Both of these are the base numbers scaled by whatever the run has made
+// faster (GLASS CANNON, OVERDRIVE). The launch speed climbs with the stage
+// rather than with the level index, which is only which file the stage drew.
 static float initSpeed(void)
 {
-  float speed = 380.0f + paddle.level * 5.0f;
-  return fminf(speed, 500.0f);
+  float speed = 380.0f + runSpeedLevel(paddle.level) * 5.0f;
+  return fminf(speed, 500.0f) * runBallSpeedScale();
+}
+
+static float maxSpeed(void)
+{
+  return MAX_SPEED * runBallSpeedScale();
 }
 
 static float effectiveSpeedFactor(void)
@@ -95,7 +105,7 @@ static void enforceMinVerticalAngle(Ball *ball)
 
 static void increaseSpeed(Ball *ball)
 {
-  if (ball->speed < MAX_SPEED)
+  if (ball->speed < maxSpeed())
   {
     ball->speed += SPEED_PER_HIT;
   }
@@ -114,6 +124,7 @@ static void handleBrickCollisions(Ball *ball, float stepX, float stepY)
   }
 
   bool fire = fireballActive();
+  bool melts = fire && runHasPerk(PERK_MELTDOWN);
   bool flipX = false;
   bool flipY = false;
 
@@ -125,14 +136,15 @@ static void handleBrickCollisions(Ball *ball, float stepX, float stepY)
     Brick *brick = nearBricks[i];
     bool touched = false;
 
-    if (fire && brick->kind != BRICK_SOLID)
+    if (fire && (brick->kind != BRICK_SOLID || melts))
     {
-      // Fireball smashes straight through destructible bricks
+      // Fireball smashes straight through destructible bricks - and through
+      // steel as well, under MELTDOWN
       if (checkCollision(
               ball->pos.x + stepX, ball->pos.y + stepY, BALL_SIZE, BALL_SIZE,
               brick->pos.x, brick->pos.y, BRICK_WIDTH, BRICK_HEIGHT))
       {
-        damageBrick(brick, 99, true, vec2Norm(ball->vel, 1.0f));
+        damageBrick(brick, 99, HIT_BALL, vec2Norm(ball->vel, 1.0f));
         increaseSpeed(ball);
       }
       continue;
@@ -176,7 +188,7 @@ static void handleBrickCollisions(Ball *ball, float stepX, float stepY)
 
   for (int i = 0; i < hitCount; i++)
   {
-    damageBrick(hit[i], 1, true, impact);
+    damageBrick(hit[i], 1, HIT_BALL, impact);
     increaseSpeed(ball);
   }
 }
@@ -214,7 +226,7 @@ static void handleBossCollision(Ball *ball, float nextX, float nextY)
   // paddle touch, breaks it.
   if (hit == BOSS_HIT_CORE)
   {
-    registerBallBrickBreak();
+    addComboLinks(1, nextX + BALL_SIZE / 2.0f, nextY);
   }
 }
 
@@ -241,7 +253,12 @@ static bool handlePaddleCollision(Ball *ball, float nextX, float nextY)
     return false;
   }
 
-  resetCombo();
+  // SOFT HANDS: a catch is not the chain ending, only pausing in the player's
+  // hands. Every other touch of the paddle ends it, as it always has.
+  if (!(paddle.type == PADDLE_TYPE_STICKY && runHasPerk(PERK_SOFT_HANDS)))
+  {
+    resetCombo();
+  }
 
   float ballCenterX = ball->pos.x + BALL_SIZE / 2.0f;
   float hitPosition = clamp(
@@ -567,7 +584,7 @@ void drawBall(const Ball *ball)
   else
   {
     // Subtle squash & stretch along the direction of travel
-    float speed01 = clamp(ball->speed / 620.0f, 0.0f, 1.0f);
+    float speed01 = clamp(ball->speed / maxSpeed(), 0.0f, 1.0f);
     float w = BALL_SIZE * (1.0f + 0.14f * speed01);
     float h = BALL_SIZE * (1.0f - 0.08f * speed01);
     float angle = atan2f(ball->vel.y, ball->vel.x) * 57.2958f;

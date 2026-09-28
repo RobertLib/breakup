@@ -107,7 +107,14 @@ for lib in "${SDL3_LIBS[@]}"; do
         mkdir -p "$root/build"
         if [ ! -f "$archive" ]; then
             echo "build_windows: downloading $lib $lib_version (mingw)"
-            curl --fail --location --progress-bar --output "$archive.part" "$url"
+            # `--retry` because GitHub's release-asset CDN answers the odd 500
+            # or 503 and is fine a second later. curl counts 408, 429, 500,
+            # 502, 503 and 504 as transient and backs off between attempts; a
+            # 404 — a pin naming a release that does not exist — still fails at
+            # once, and the sha256 below still decides whether the bytes are
+            # the right ones.
+            curl --fail --location --retry 5 --progress-bar \
+                --output "$archive.part" "$url"
             mv "$archive.part" "$archive"
         fi
 

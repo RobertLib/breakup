@@ -17,12 +17,21 @@ int queryBricksNear(float x, float y, Brick **out, int maxOut);
 // the level.
 bool bricksOverlapRect(float x, float y, int w, int h);
 
+// What landed a hit, which is what decides what the combo makes of it.
+typedef enum HitSource
+{
+  HIT_BALL,      // scores at the multiplier and adds a link
+  HIT_LASER,     // plain points, unless the run holds TRACER ROUNDS
+  HIT_EXPLOSION, // scores at the multiplier; adds a link with CHAIN REACTION
+  HIT_BOSS       // the arena going up with a boss: plain points
+} HitSource;
+
 // Applies damage to a brick, handling scoring, effects, drops, explosions
-// and the level-complete check. Solid bricks shrug it off.
-// byBall: true when the hit came from a ball (combo scoring applies).
+// and the level-complete check. Solid bricks shrug it off (unless a fireball
+// under MELTDOWN is what hit them).
 // impactDir: which way the blow was travelling, for the debris to follow;
 // {0, 0} throws it evenly around instead.
-void damageBrick(Brick *brick, int damage, bool byBall, Vec2 impactDir);
+void damageBrick(Brick *brick, int damage, HitSource source, Vec2 impactDir);
 
 // Ends the level if nothing is left standing that would keep it open. Called
 // after every brick that breaks, and by the boss when it finally goes down.

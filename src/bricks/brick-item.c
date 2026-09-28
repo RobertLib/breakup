@@ -5,10 +5,15 @@
 #include "../lib/effects.h"
 #include "../lib/particles.h"
 #include "../paddle/paddle.h"
+#include "../run/perks.h"
+#include "../run/run.h"
 #include "../ui/floating-text.h"
 
 #define MAX_ITEMS 12
 #define ITEM_FALL_SPEED 170
+
+// How fast MAGNET pulls a capsule sideways towards the paddle, px/s.
+#define MAGNET_PULL 190.0f
 
 typedef struct BrickItem
 {
@@ -35,7 +40,7 @@ static const int itemWeights[ITEM_COUNT] = {
 
 static const char *itemNames[ITEM_COUNT] = {
     "EXPAND", "LASER", "CATCH", "+1 LIFE", "MULTIBALL",
-    "SLOW", "FIREBALL", "BARRIER", "SHRINK!"};
+    "SLOW", "FIREBALL", "BARRIER", "SHRINK x+1"};
 
 // Both tables are indexed by ItemType, and a missing entry is a zero rather
 // than a compile error: a tenth power-up added to the enum would silently drop
@@ -124,13 +129,13 @@ static void applyItem(ItemType type, float x, float y)
     activateAllBalls();
     break;
   case ITEM_SLOW:
-    effects.slow = EFFECT_SLOW_DURATION;
+    effects.slow = EFFECT_SLOW_DURATION * runPowerUpDurationScale();
     break;
   case ITEM_FIRE:
-    effects.fire = EFFECT_FIRE_DURATION;
+    effects.fire = EFFECT_FIRE_DURATION * runPowerUpDurationScale();
     break;
   case ITEM_SHIELD:
-    effects.shield = EFFECT_SHIELD_DURATION;
+    effects.shield = EFFECT_SHIELD_DURATION * runPowerUpDurationScale();
     break;
   case ITEM_SHRINK:
     changePaddleType(PADDLE_TYPE_SHORT);
@@ -173,6 +178,16 @@ void updateBrickItems(void)
 
     item->pos.y += ITEM_FALL_SPEED * (float)dt;
     item->spin += (float)dt * 5.0f;
+
+    // MAGNET: steered by where the capsule is drawn, sway and all, since that
+    // is what the catch below is tested against. A dying paddle pulls nothing.
+    if (runHasPerk(PERK_MAGNET) && paddle.type != PADDLE_TYPE_DYING)
+    {
+      float dx = paddle.pos.x - (itemDrawX(item) + GFX_ITEM_W / 2.0f);
+      float step = MAGNET_PULL * (float)dt;
+
+      item->pos.x += clamp(dx, -step, step);
+    }
 
     if (item->pos.y > camera.y + SCREEN_HEIGHT)
     {
